@@ -1,0 +1,72 @@
+name: Build & Deploy to GitHub Pages
+
+# Trigger: every push to master automatically rebuilds and redeploys the game.
+on:
+  push:
+    branches: [master]
+
+# Permissions required by the deploy-pages action.
+permissions:
+  contents: read   # checkout
+  pages: write     # upload/deploy pages artifact
+  id-token: write  # OIDC token for deploy-pages
+
+# Allow one deployment at a time; never cancel an in-progress deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    # Attach this job to the github-pages environment so the deployment URL
+    # appears in the Actions UI and in the repo's Environments panel.
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      # ── 1. Source ─────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Python toolchain ───────────────────────────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          cache: true   # persist the tool cache across runs (~30 s saved per run)
+
+      # ── 3. Build ──────────────────────────────────────────────────────────
+      # pygbag 0.9.3 --no_server: build the APK + web files then exit without
+      # starting the HTTP listener.  This is the clean CI build path.
+      # pygbag copies Python sources and static/ contents into build/web/.
+      - name: Build game with pygbag
+        run: |
+          set -euo pipefail
+          uv tool run --from 'pygbag==0.9.3' pygbag \
+            --ume_block 0 \
+            --disable-sound-format-error \
+            --no_server \
+            --template custom.tmpl \
+            main.py
+
+          # Belt-and-suspenders: verify the expected web-root files were emitted.
+          test -f build/web/index.html    || { echo "ERROR: build/web/index.html missing";    exit 1; }
+          test -f build/web/manifest.json || { echo "ERROR: build/web/manifest.json missing";  exit 1; }
+          test -f build/web/sw.js         || { echo "ERROR: build/web/sw.js missing";          exit 1; }
+          test -f build/web/icon-192.png  || { echo "ERROR: build/web/icon-192.png missing";   exit 1; }
+          test -f build/web/icon-512.png  || { echo "ERROR: build/web/icon-512.png missing";   exit 1; }
+
+      # ── 4. Deploy ─────────────────────────────────────────────────────────
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

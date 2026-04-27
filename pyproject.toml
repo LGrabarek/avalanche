@@ -1,0 +1,45 @@
+[project]
+name = "avalanche"
+version = "0.1.0"
+description = "Browser PWA reproduction of I.Q.: Intelligent Qube (1997)."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pygame-ce>=2.5.7",
+    "pygbag>=0.9.3",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+# --- Linter / type-checker configuration ---
+# Required by CLAUDE.md Rule 10: ruff check . and mypy --strict must both
+# report zero errors/warnings. Tighten this file rather than adding per-call
+# suppressions.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+# Scan only hand-written source; exclude generated/build artifacts.
+extend-exclude = ["build", ".venv", "__pycache__", "Research"]
+
+[tool.ruff.lint]
+# Pragmatic preset covering the checks Rule 10 cares about:
+#   E/W = pycodestyle (formatting)       I  = isort (imports)
+#   F   = pyflakes (dead code)           N  = pep8-naming
+#   UP  = pyupgrade                      B  = flake8-bugbear (common pitfalls)
+#   SIM = flake8-simplify                C4 = flake8-comprehensions
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "C4"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+# Exclude build output and third-party code we don't own.
+exclude = ["build/", "\\.venv/", "__pycache__/"]
+# Game source imports pygame-ce (has stubs) — no further silencing needed.
+warn_unused_ignores = true
+warn_redundant_casts = true
