@@ -407,7 +407,7 @@ installer, no setup.
 - `.github/workflows/deploy.yml` — GitHub Actions workflow triggered on push to `master`:
   1. `actions/checkout@v4`
   2. `astral-sh/setup-uv@v3` with `cache: true`
-  3. `uv tool run --from 'pygbag==0.9.3' pygbag --no_server --ume_block 0 --disable-sound-format-error --template custom.tmpl main.py`
+  3. `uv tool run --from 'pygbag==0.9.3' pygbag --build --ume_block 0 --disable-sound-format-error --template custom.tmpl main.py`
   4. Belt-and-suspenders checks: `index.html`, `manifest.json`, `sw.js`, `icon-192.png`, `icon-512.png` present in `build/web/`
   5. `actions/configure-pages@v4` → `upload-pages-artifact@v3` → `deploy-pages@v4`
 - `static/sw.js` — bump `CACHE_NAME` to `'avalanche-v2'`; `SHELL_URLS` changed to

@@ -575,7 +575,7 @@ tracker extended to cover all new steps.
 
 New files:
 - `.github/workflows/deploy.yml` — triggered on push to `master`. Installs uv with
-  tool cache, runs `pygbag --no_server` to build `build/web/`, verifies 5 expected
+  tool cache, runs `pygbag --build` to build `build/web/`, verifies 5 expected
   output files are present, deploys via `actions/configure-pages` +
   `upload-pages-artifact@v3` + `deploy-pages@v4`.
 
@@ -588,9 +588,9 @@ Changed files:
 
 Expert panel findings (all CONCERNS → APPROVED after fixes):
 - Vision Lead: SW absolute paths (`/index.html`) wrong on GitHub Pages sub-path → fixed with BASE computation.
-- Code Quality: `timeout 60 ... || true` masked errors; 60 s too short on cold runner → replaced with `pygbag --no_server`; `set -euo pipefail` added; `cache: true` on setup-uv.
+- Code Quality: `timeout 60 ... || true` masked errors; 60 s too short on cold runner → replaced with `pygbag --build`; `set -euo pipefail` added; `cache: true` on setup-uv.
 - UX Tester: loading bar undocumented; URL format ambiguous; offline expectation missing; mobile scope unclear → review doc updated.
-- Platform Engineer: confirmed `--no_server` flag in pygbag 0.9.3; same SW sub-path bug; `.python-version`/`run_dev.sh` inflating APK → all fixed.
+- Platform Engineer: suggested `--no_server` (incorrect — flag doesn't exist); actual working flag is `--build` (confirmed from pygbag help output in CI); same SW sub-path bug; `.python-version`/`run_dev.sh` inflating APK → all fixed.
 
 `docs/STEP12_REVIEW.md` written (GitHub repo creation instructions + verification checklist).
 Awaiting user to create GitHub repo and confirm live deployment.

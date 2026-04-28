@@ -38,7 +38,7 @@ jobs:
           cache: true   # persist the tool cache across runs (~30 s saved per run)
 
       # ── 3. Build ──────────────────────────────────────────────────────────
-      # pygbag 0.9.3 --no_server: build the APK + web files then exit without
+      # pygbag 0.9.3 --build: build the APK + web files then exit without
       # starting the HTTP listener.  This is the clean CI build path.
       # pygbag copies Python sources and static/ contents into build/web/.
       - name: Build game with pygbag
@@ -47,7 +47,7 @@ jobs:
           uv tool run --from 'pygbag==0.9.3' pygbag \
             --ume_block 0 \
             --disable-sound-format-error \
-            --no_server \
+            --build \
             --template custom.tmpl \
             main.py
 
