@@ -104,38 +104,44 @@ FAR_PLANE: float = 100.0
 # (CAMERA_FOLLOW_SMOOTH).  Because the eye never translates, the world
 # stays spatially anchored; only the viewing direction swivels gently.
 #
-# Eye position:  (3.0, 12.0, −2.0)
+# Eye position:  (3.0, 7.8, 2.0)
 #
-#   eye.z = −2: the eye sits TWO UNITS BEHIND the front edge (z = 0).
-#   Every valid player position has target.z ≥ 0.5, so the look-at
-#   vector ALWAYS points in the +z direction.  This keeps the screen-space
-#   mapping of A/D consistent with the world frame at every player z —
-#   D (world +x) is always screen-right, A (world −x) always screen-left,
-#   regardless of how far the player has retreated toward the front edge.
-#   With eye.z = +2 the camera looked BACKWARD once the player crossed
-#   z = 2, swapping A/D — this fixes that.
+#   eye.z = +2: placed two units inside the front edge, giving a 20%
+#   shorter look-distance to spawn vs eye.z=−2 (dz 19.5 vs 23.5 u).
+#   Shorter dz → larger horizontal swivel angle per tile of lateral
+#   player movement → 20% wider perceived swivel range.
 #
-#   eye.y = 12 (raised from 10 to compensate for moving 4 units farther
-#   back in z, preserving the ~27° elevation at spawn):
+#   Orientation safety: eye.z = +2 would let the camera look BACKWARD
+#   once the smooth target.z fell below 2.0.  CAMERA_FOLLOW_TARGET_Z_MIN
+#   clamps the smooth target to ≥ 2.5, guaranteeing target.z > eye.z
+#   always.  With k=2 the smooth target only reaches 2.5 after ~1.6 s
+#   of the player sitting at z=0 (effectively unreachable — they're dead
+#   long before then).
+#
+#   eye.y = 7.8 (20% shallower elevation than the previous 27°):
 #     At player spawn (3.5, 0, 21.5):
-#       horiz dist = sqrt(0.5² + 23.5²) ≈ 23.5 u
-#       elevation  = atan2(12, 23.5) ≈ 27°  (matches 28° overview)
-#       total dist ≈ 26.1 u  (still more intimate than 33 u overview)
+#       horiz dist ≈ sqrt(0.5² + 19.5²) ≈ 19.5 u
+#       elevation  = atan2(7.8, 19.5) ≈ 21.8°  (80% of previous 27.1°)
+#       total dist ≈ 21.0 u
 #
-#   Horizontal swivel range (tile-centred):
-#     left  x=0 → dx=−2.5, dz=23.5 → atan2(2.5,23.5) ≈ 6.1°
-#     right x=6 → dx=+3.5, dz=23.5 → atan2(3.5,23.5) ≈ 8.5°
-#     Total ~15° — sub-perceptual as camera motion.
+#   Horizontal swivel range at spawn (tile-centred, 20% wider than before):
+#     left  x=0 → dx=−2.5, dz=19.5 → atan2(2.5,19.5) ≈ 7.3°
+#     right x=6 → dx=+3.5, dz=19.5 → atan2(3.5,19.5) ≈ 10.2°
+#     Total ≈ 17.5° vs previous 14.6° (+20%).
 #
 # CAMERA_FOLLOW_SMOOTH: exponential-decay coefficient (s⁻¹).
-#   alpha = 1 − exp(−k·dt).  k=2.5 → ~26% per MOVE_COOLDOWN (0.12 s);
-#   ~71% catch-up in 0.5 s; ~92% in 1 s.  Noticeably weighted glide.
+#   alpha = 1 − exp(−k·dt).  k=2 → ~21% per MOVE_COOLDOWN (0.12 s);
+#   ~63% catch-up in 0.5 s; ~86% in 1 s.  Heavier weighted glide.
+#
+# CAMERA_FOLLOW_TARGET_Z_MIN: floor on the smooth z-target so it never
+#   falls below eye.z, preserving +z look-direction at all times.
 #
 # CAMERA_FOLLOW_FOV: narrower than 50° overview to reduce peripheral
 # distortion at close range.
-CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 12.0, -2.0)
+CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 7.8, 2.0)
 CAMERA_FOLLOW_FOV: float = 42.0
-CAMERA_FOLLOW_SMOOTH: float = 2.5
+CAMERA_FOLLOW_SMOOTH: float = 2.0
+CAMERA_FOLLOW_TARGET_Z_MIN: float = 2.5   # eye.z (2.0) + 0.5 clearance
 
 
 # --- Face shading -------------------------------------------------------------

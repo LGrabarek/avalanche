@@ -14,6 +14,7 @@ from constants import (
     CAMERA_FOLLOW_EYE,
     CAMERA_FOLLOW_FOV,
     CAMERA_FOLLOW_SMOOTH,
+    CAMERA_FOLLOW_TARGET_Z_MIN,
     CAMERA_POS,
     CAMERA_TARGET,
     DANGER_TOP_COLOR,
@@ -510,6 +511,8 @@ def _update_smooth_camera(
             alpha = 1.0 - math.exp(-CAMERA_FOLLOW_SMOOTH * dt)
             cam_xz[0] += (wx - cam_xz[0]) * alpha
             cam_xz[1] += (wz - cam_xz[1]) * alpha
+        # Keep target.z above eye.z so the camera always looks in +z.
+        cam_xz[1] = max(CAMERA_FOLLOW_TARGET_Z_MIN, cam_xz[1])
         renderer.rebuild_vp(
             CAMERA_FOLLOW_EYE, (cam_xz[0], 0.0, cam_xz[1]), CAMERA_FOLLOW_FOV
         )
