@@ -84,10 +84,22 @@ class WaveManager:
             raise ValueError(f"tick_interval must be positive, got {value}")
         self._tick_interval = value
         # A mid-tumble crush sets interval from 1.2s to 0.15s while
-        # tick_elapsed may be ~0.33s. Without this reset the overshoot
+        # tick_elapsed may be ~0.33s. Without a clamp the overshoot
         # assertion in update() fires on the very next frame.
+        #
+        # We clamp to (value - 1e-6) rather than 0.0 so that the next
+        # update() call fires a tick on the very next frame instead of
+        # restarting the full interval from zero. This prevents the turbo
+        # freeze exploit where rapid F taps keep _tick_elapsed near zero
+        # indefinitely (wave advances never fire while turbo is flicked on
+        # and off). With this fix, pressing F when elapsed > value still
+        # fires a tick on the next frame — the wave cannot be frozen.
+        #
+        # Safety: worst-case overshoot = DT_CLAMP - 1e-6 ≈ 0.1 s, which
+        # is less than the minimum interval (AVALANCHE_TICK_INTERVAL = 0.12 s
+        # or larger). The assert in update() remains satisfied.
         if self._tick_elapsed >= value:
-            self._tick_elapsed = 0.0
+            self._tick_elapsed = max(0.0, value - 1e-6)
 
     @property
     def last_dropped(self) -> list[Cube]:
