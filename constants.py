@@ -31,16 +31,33 @@ TILE_SIZE: float = 1.0   # World-space unit per tile
 
 # --- Timing -------------------------------------------------------------------
 
-AVALANCHE_TICK_INTERVAL: float = 0.15  # Seconds between cube advances during avalanche.
-# Must be > DT_CLAMP (0.1) so the overshoot assertion in WaveManager.update()
-# is never violated on a clamped tab-switch frame.
+# Per-stage wave tick intervals (0-based stage index).
+# Index 0: 1.2 s — the single base value used by all stages.
+# GameManager._cur_tick_interval applies TICK_SPEED_DECAY from this base.
+STAGE_TICK_INTERVALS: list[float] = [1.2]
+assert len(STAGE_TICK_INTERVALS) > 0, "STAGE_TICK_INTERVALS must not be empty"
+# Applied to STAGE_TICK_INTERVALS[0] once every two stages (3, 5, 7, …).
+# 0.9 = 10 % faster. Stages 1+2 share the base. Even stages (4, 6, 8, …)
+# share the interval of the preceding odd stage (i // 2 integer division).
+TICK_SPEED_DECAY: float = 0.9
 
-# TICK_INTERVAL: provisional Stage-1 value. I.Q.'s original uses a dual-
-# variable Wait/Speed metronome that accelerates per stage; a full per-stage
-# tick table lands in Step 7 when the difficulty curve is calibrated. Values
-# in the 0.8–1.2s range are plausible for Stage 1; 1.2s errs toward slow
-# so Step 3A's visual verification is easy to eyeball.
-TICK_INTERVAL: float = 1.2    # Seconds between cube advances
+# Per-stage avalanche tick intervals (0-based stage index).
+# Both values must be > DT_CLAMP (0.1 s) — see WaveManager.update() overshoot
+# assertion. Stage 1 (index 0): 0.15 s. Stage 2 (index 1): 0.12 s.
+STAGE_AVALANCHE_TICK_INTERVALS: list[float] = [0.15, 0.12]
+assert len(STAGE_AVALANCHE_TICK_INTERVALS) > 0, (
+    "STAGE_AVALANCHE_TICK_INTERVALS must not be empty"
+)
+
+# Backward-compatible aliases: Stage-1 (index-0) values.
+# TICK_INTERVAL is used by WaveManager.__init__ as its default argument.
+TICK_INTERVAL: float = STAGE_TICK_INTERVALS[0]
+AVALANCHE_TICK_INTERVAL: float = STAGE_AVALANCHE_TICK_INTERVALS[0]
+# Turbo mode: hold KEY_TURBO (F) to tick faster during WAVE_ACTIVE. Chosen
+# faster than STAGE_TICK_INTERVALS[0] (1.2 s) but slower than
+# STAGE_AVALANCHE_TICK_INTERVALS[0] (0.15 s): controlled acceleration, not panic.
+# GameManager.set_turbo() restores to the per-stage normal interval on release.
+TURBO_TICK_INTERVAL: float = 0.25   # Seconds between cube advances in turbo mode
 # Step 10A: tuned from 0.08 s to 0.12 s after user confirmation that the
 # original felt too fast. 120 ms is still snappy but aligns better with
 # the crush pressure of the real I.Q. (range tested: 0.10–0.18 s).
@@ -48,35 +65,62 @@ MOVE_COOLDOWN: float = 0.12   # Seconds between player moves
 # Pause between wave-cleared and the next wave spawning. During this window
 # the WAVE_RISING overlay shows (and PERFECT! if the wave was Perfect).
 WAVE_RISING_DURATION: float = 2.0   # Seconds
+# Hold before the restart prompt becomes active on the GAME_OVER / VICTORY screen.
+# Prevents accidental skips when the end condition fires mid-keypress.
+# During the hold the prompt is shown dimmed; it brightens when input is accepted.
+END_SCREEN_HOLD: float = 2.0        # Seconds
 
 
 # --- Camera -------------------------------------------------------------------
 # Derived from grid dimensions so changing GRID_WIDTH/GRID_DEPTH for a future
 # stage automatically reframes the view.
 #
-# Step 6B values: elevation reduced from ~45° to ~23° (≈20° offset as requested)
-# so the full grid — including the front row at z=0 — is visible in the 960×640
-# viewport.  The camera sits above and in front of the grid, targeting the
-# exact centre of the grid in both X and Z.
+# Step 24 (A7 camera rework): raised elevation from 25° → 28° by lifting the
+# camera Y from 13.0 to 15.0.  Higher elevation gives clearer row-depth cues
+# (the checkerboard pattern reads more strongly) and makes the advancing wave
+# look more dramatic.  Per-stage camera travel (the platform scrolls in the
+# original I.Q.) is explicitly out of scope for this step.
 #
-# Elevation geometry:
-#   direction = target – pos = (0, –12, 28)
-#   elevation = atan2(12, 28) ≈ 23° ≈ (original 45°) – 22°
-#   front-row vertex at z=–0.5 projects to y_ndc ≈ –0.84 (clearly above –1.0 clip)
-#   back-row vertex at z=24.5 projects to y_ndc ≈ +0.41 (well within top clip)
-#
-# TODO(camera): camera positioning, angles, and per-stage travel (the platform
-# scrolls under the player in the original I.Q.) need a full rework in a future
-# stage.  The values here are provisional for Steps 6–9 and should be revisited
-# alongside wave-progression work (Step 9) and visual polish (Step 10).
+# Elevation geometry (verified numerically):
+#   direction = target – pos = (0, –15, 28)
+#   elevation = atan2(15, 28) ≈ 28°
+#   front-row vertex z=–0.5, y=0 → y_ndc ≈ –0.61  (safely above –1.0 clip)
+#   back-row  vertex z=24.5, y=0 → y_ndc ≈ +0.30  (safely below +1.0 clip)
+#   front-left corner x=–0.5    → x_ndc ≈ +0.24  (within ±1.0)
+#   back-right corner x=6.5     → x_ndc ≈ –0.12  (within ±1.0)
 
 _GRID_CENTER_X: float = (GRID_WIDTH - 1) * 0.5
 _GRID_CENTER_Z: float = (GRID_DEPTH - 1) * 0.5   # = 12.0 for GRID_DEPTH=25
-CAMERA_POS: tuple[float, float, float] = (_GRID_CENTER_X, 12.0, _GRID_CENTER_Z - 28.0)
+CAMERA_POS: tuple[float, float, float] = (_GRID_CENTER_X, 15.0, _GRID_CENTER_Z - 28.0)
 CAMERA_TARGET: tuple[float, float, float] = (_GRID_CENTER_X, 0.0, _GRID_CENTER_Z)
-CAMERA_FOV: float = 50.0     # Widened from 45° to keep full grid in frame at lower elevation
+CAMERA_FOV: float = 50.0     # Widened from 45° in Step 6B to keep full grid in frame
 NEAR_PLANE: float = 0.1
 FAR_PLANE: float = 100.0
+
+
+# --- Face shading -------------------------------------------------------------
+# Per-face brightness multipliers applied in cube_data.get_cube_faces().
+# Ordered to match the _CUBE_FACES tuple in cube_data.py (indices 0–5):
+#   0 top (+Y)   1 bottom (-Y)   2 front (+Z, toward camera)
+#   3 back (-Z)  4 side -X       5 side +X
+#
+# Light implied from upper-left (screen space).  Screen-left = world +X, so
+# the +X face (index 5) is the lit side; -X (index 4) and back (index 3) are
+# shadow.  Front (+Z, index 2) catches oblique light — same tier as lit side.
+FACE_TOP_MULT: float = 1.00
+FACE_RIGHT_MULT: float = 0.75   # lit side: front and screen-left (+X) face
+FACE_LEFT_MULT: float = 0.55    # shadow side: back and screen-right (-X) face
+FACE_BOTTOM_MULT: float = 0.40  # floor face — never visible in play
+# Ordered tuple for indexed lookup by face index in cube_data.get_cube_faces().
+FACE_MULTS: tuple[float, ...] = (
+    FACE_TOP_MULT,     # 0: top
+    FACE_BOTTOM_MULT,  # 1: bottom
+    FACE_RIGHT_MULT,   # 2: front (+Z toward camera) — obliquely lit
+    FACE_LEFT_MULT,    # 3: back  (-Z) — shadow
+    FACE_LEFT_MULT,    # 4: side -X   — screen-right shadow face
+    FACE_RIGHT_MULT,   # 5: side +X   — screen-left lit face
+)
+assert len(FACE_MULTS) == 6, "FACE_MULTS must have one entry per face in _CUBE_FACES"
 
 
 # --- Enums --------------------------------------------------------------------
@@ -137,6 +181,8 @@ class GamePhase(Enum):
     ROW_COLLAPSING = "row_collapsing"
     GAME_OVER = "game_over"
     VICTORY = "victory"
+    STAGE_CLEAR = "stage_clear"  # Between-stage screen; all gameplay frozen
+    MENU = "menu"           # Esc pause menu open; all gameplay frozen
 
 
 # --- Registry TypedDicts ------------------------------------------------------
@@ -145,10 +191,9 @@ class GamePhase(Enum):
 # types can't ship with a typo'd color key.
 
 class CubeTypeInfo(TypedDict):
-    # `colors` is typed as plain dict[str, ColorRGB] rather than a nested
-    # TypedDict because _build_faces indexes it with a runtime-computed key
-    # from _CUBE_FACES, which TypedDict literal-key lookup does not support.
-    colors: dict[str, ColorRGB]
+    # Single base colour; face shading is derived by multiplying with FACE_MULTS
+    # in cube_data.get_cube_faces() — no per-face hand-coding needed.
+    base_color: ColorRGB
     edge_color: ColorRGB
     edge_width: int
     on_capture: CubeBehavior
@@ -169,13 +214,7 @@ class TileColorSet(TypedDict):
 
 CUBE_TYPES: dict[CubeType, CubeTypeInfo] = {
     CubeType.NORMAL: {
-        "colors": {
-            "top": (180, 180, 180),
-            "front": (140, 140, 140),
-            "back": (100, 100, 100),
-            "side": (100, 100, 100),
-            "bottom": (80, 80, 80),
-        },
+        "base_color": (180, 180, 180),  # mid-grey; FACE_MULTS derive all six faces
         "edge_color": (60, 60, 60),
         "edge_width": 1,
         "on_capture": CubeBehavior.SCORE,
@@ -185,14 +224,8 @@ CUBE_TYPES: dict[CubeType, CubeTypeInfo] = {
         "chain_score": 200,
     },
     CubeType.ADVANTAGE: {
-        "colors": {
-            "top": (100, 220, 100),
-            "front": (60, 180, 60),
-            "back": (30, 140, 30),
-            "side": (30, 140, 30),
-            "bottom": (20, 90, 20),
-        },
-        "edge_color": (0, 255, 0),
+        "base_color": (100, 220, 100),  # bright green; lit side ≈ (75,165,75)
+        "edge_color": (0, 200, 0),      # toned down from pure (0,255,0)
         "edge_width": 1,
         "on_capture": CubeBehavior.CREATE_TRAP,
         "on_missed": CubeBehavior.PENALTY,
@@ -201,13 +234,7 @@ CUBE_TYPES: dict[CubeType, CubeTypeInfo] = {
         "chain_score": 200,
     },
     CubeType.FORBIDDEN: {
-        "colors": {
-            "top": (60, 30, 60),
-            "front": (40, 20, 40),
-            "back": (25, 12, 25),
-            "side": (25, 12, 25),
-            "bottom": (15, 8, 15),
-        },
+        "base_color": (60, 30, 60),     # dark purple; lit side ≈ (45,22,45)
         "edge_color": (180, 0, 0),
         "edge_width": 2,
         "on_capture": CubeBehavior.ROW_DELETE,
@@ -226,6 +253,17 @@ TILE_COLORS: dict[TileState, TileColorSet] = {
     TileState.MARKED:   {"top": (200, 220, 255), "edge": (120, 140, 180)},
     TileState.ADVANTAGE_TRAP: {"top": (80, 200, 80), "edge": (40, 120, 40)},
 }
+
+# B3c: Amount to add to each RGB channel on alternate PLATFORM tiles (checkerboard).
+# Applied when (grid_x + grid_z) % 2 == 1. Only affects PLATFORM tiles;
+# MARKED and ADVANTAGE_TRAP are already visually distinctive.
+TILE_CHECKER_DELTA: int = 8
+
+# B3e: Top-face override colour for cubes one tick from the platform's front edge.
+# Saturated yellow: orthogonal to Normal (grey), Advantage (green), Forbidden
+# (purple), and the player cube (blue), while matching the PERFECT! warning
+# vocabulary already present in the HUD/overlay palette (255, 220, 50).
+DANGER_TOP_COLOR: ColorRGB = (255, 220, 0)
 
 
 # --- Player -------------------------------------------------------------------
@@ -277,6 +315,9 @@ KEY_MARK: int = pygame.K_SPACE
 KEY_TRIGGER: int = pygame.K_x
 KEY_TRIGGER_ALT: int = pygame.K_RETURN
 KEY_DETONATE: int = pygame.K_z
+# Hold to speed up wave ticks during WAVE_ACTIVE only. Right-hand key so
+# movement (WASD) and turbo can be used simultaneously.
+KEY_TURBO: int = pygame.K_f
 
 # A direction is triggered when ANY key in its tuple is held. Using
 # tuple[int, ...] lets Step 2 ship with two bindings per direction without
@@ -288,6 +329,14 @@ MOVEMENT_KEYS: dict[Direction, tuple[int, ...]] = {
     Direction.FORWARD:  (pygame.K_UP,    pygame.K_w),
     Direction.BACKWARD: (pygame.K_DOWN,  pygame.K_s),
 }
+
+
+# --- Audio -------------------------------------------------------------------
+
+# Set to False to silence all sound effects globally. AudioSystem also
+# self-disables when pygame.mixer fails to initialise (no audio device,
+# headless CI, WASM format errors). This flag is the user-facing override.
+SOUND_ENABLED: bool = True
 
 
 # --- Sin/cos lookup table for tumble animation --------------------------------

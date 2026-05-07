@@ -10,12 +10,14 @@ import math
 
 from constants import (
     CUBE_TYPES,
+    FACE_MULTS,
     PLAYER_CENTER_Y,
     PLAYER_COLORS,
     PLAYER_CRUSH_COLORS,
     PLAYER_CRUSH_EDGE_COLOR,
     PLAYER_EDGE_COLOR,
     PLAYER_HALF_EXTENT,
+    TILE_CHECKER_DELTA,
     TILE_COLORS,
     TUMBLE_BALANCE_END,
     TUMBLE_COS_LUT,
@@ -43,8 +45,9 @@ _CUBE_VERTS: tuple[Vec3, ...] = (
     (-0.5,  0.5,  0.5),  # 7: top-left-front
 )
 
-# Face definitions: (vertex indices, face_direction). face_direction maps to
-# color keys in the cube-type registry (enforced at runtime by _build_faces).
+# Face definitions: (vertex indices, face_direction). face_direction is the
+# direction label used by _build_faces (player path); get_cube_faces (game cube
+# path) uses the face INDEX directly with FACE_MULTS and ignores the label.
 _CubeFaceDef = tuple[tuple[int, int, int, int], str]
 _CUBE_FACES: tuple[_CubeFaceDef, ...] = (
     ((3, 2, 6, 7), "top"),     # +Y
@@ -172,10 +175,10 @@ def _build_faces(
 ) -> list[FaceDescriptor]:
     """Turn 8 cube vertices + a color dict into a list of renderable faces.
 
-    Shared by both game cubes and the player cube. The `colors` dict must have
-    a key for every face direction in `_CUBE_FACES` ("top", "bottom", "front",
-    "back", "side") — missing keys raise `KeyError` rather than silently
-    falling back, so palette coverage is enforced at the registry.
+    Used by the player cube path only (via `get_player_faces`). Game cubes use
+    `get_cube_faces` directly, deriving face colours from FACE_MULTS. The
+    `colors` dict must have a key for every face direction in `_CUBE_FACES`
+    ("top", "bottom", "front", "back", "side") — missing keys raise `KeyError`.
     """
     assert len(world_verts) == 8, f"_build_faces expects 8 cube verts, got {len(world_verts)}"
     return [
@@ -190,14 +193,31 @@ def _build_faces(
 
 
 def get_cube_faces(world_verts: tuple[Vec3, ...], cube_type: CubeType) -> list[FaceDescriptor]:
-    """Get renderable faces for a cube given its 8 world-space vertices."""
-    type_info = CUBE_TYPES[cube_type]
-    return _build_faces(
-        world_verts,
-        type_info["colors"],
-        type_info["edge_color"],
-        type_info["edge_width"],
-    )
+    """Get renderable faces for a cube given its 8 world-space vertices.
+
+    Each face colour is derived by multiplying the cube type's `base_color`
+    by the corresponding entry in `FACE_MULTS` (indexed by face position in
+    `_CUBE_FACES`). This gives two distinct visible side shades — the +X face
+    (screen-left) is the lit side; the -X face (screen-right) is the shadow
+    side — producing proper depth without hand-tuning per-face values.
+    """
+    assert len(world_verts) == 8, f"get_cube_faces expects 8 vertices, got {len(world_verts)}"
+    info = CUBE_TYPES[cube_type]
+    base = info["base_color"]
+    edge = info["edge_color"]
+    width = info["edge_width"]
+    faces: list[FaceDescriptor] = []
+    for face_idx, (vert_indices, _dir) in enumerate(_CUBE_FACES):
+        mult = FACE_MULTS[face_idx]
+        # int() truncates toward zero (not round). Channels are always positive
+        # and the difference vs round() is at most 1 unit — imperceptible.
+        shaded: ColorRGB = (int(base[0] * mult), int(base[1] * mult), int(base[2] * mult))
+        v0, v1, v2, v3 = vert_indices
+        quad = (world_verts[v0], world_verts[v1], world_verts[v2], world_verts[v3])
+        assert len(faces) < 6, "cube face overflow — _CUBE_FACES has more than 6 entries"
+        faces.append((quad, shaded, edge, width))
+    assert len(faces) == 6, f"expected 6 cube faces, got {len(faces)}"
+    return faces
 
 
 class PlayerVisual:
@@ -305,6 +325,10 @@ def get_tile_face(
     z-fighting). An inset of 0.02 per side creates visible gaps between tiles.
     Callers must pass a tile_state that has a palette entry in `TILE_COLORS`;
     `TileState.VOID` is not renderable and must not reach this function.
+
+    B3c: PLATFORM tiles alternate between two shades based on
+    `(grid_x + grid_z) % 2` (checkerboard). MARKED and ADVANTAGE_TRAP tiles
+    keep their palette colour unchanged — they are already visually distinctive.
     """
     # Rule-5 precondition: only palette-backed tile states are renderable.
     if tile_state not in TILE_COLORS:
@@ -324,4 +348,14 @@ def get_tile_face(
         (x0, y, z1),   # front-left
     )
     colors = TILE_COLORS[tile_state]
-    return (verts, colors["top"], colors["edge"], 1)
+    # B3c: lighten alternate PLATFORM tiles by TILE_CHECKER_DELTA per channel.
+    if tile_state == TileState.PLATFORM and (grid_x + grid_z) % 2 == 1:
+        base = colors["top"]
+        fill: ColorRGB = (
+            min(255, base[0] + TILE_CHECKER_DELTA),
+            min(255, base[1] + TILE_CHECKER_DELTA),
+            min(255, base[2] + TILE_CHECKER_DELTA),
+        )
+    else:
+        fill = colors["top"]
+    return (verts, fill, colors["edge"], 1)

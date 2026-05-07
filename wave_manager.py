@@ -288,18 +288,36 @@ class WaveManager:
     # --- Wave lifecycle ------------------------------------------------------
 
     def reset_for_new_wave(self) -> None:
-        """Clear all cubes and reset the tick timer for a fresh wave.
+        """Clear all cubes and reset the tick elapsed timer for a fresh wave.
 
-        Called by `GameManager._spawn_wave` when advancing to the next wave.
-        After this call the wave is empty and the tick timer is reset to the
-        default `TICK_INTERVAL` so the first tick of the new wave fires on
-        a clean schedule rather than inheriting overshoot from the previous wave.
+        Called by `GameManager._spawn_wave`, `_on_stage_complete`, and
+        `_do_restart`. Does NOT reset `_tick_interval` — the caller sets the
+        correct stage-indexed interval via `wave.tick_interval = ...` immediately
+        after this call (Step 21 per-stage tick table). This keeps WaveManager
+        free of stage knowledge.
         """
         self._cubes = []
         self._tick_elapsed = 0.0
-        self._tick_interval = TICK_INTERVAL
         self._last_dropped = []
         assert self.cube_count == 0, "cubes not cleared after reset_for_new_wave"
+
+    # --- Danger query --------------------------------------------------------
+
+    def danger_cubes(self, front_edge_z: int) -> frozenset[tuple[int, int]]:
+        """Return (grid_x, grid_z) for cubes one tick from the platform's front edge.
+
+        A cube at `front_edge_z + 1` will advance to `front_edge_z` on the
+        next tick and is highlighted by the renderer as a visual danger warning
+        (B3e telegraph).  Returns an empty frozenset when no cubes are in the
+        danger zone or when the wave has no cubes.
+        """
+        if front_edge_z < 0:
+            raise ValueError(f"front_edge_z must be non-negative, got {front_edge_z}")
+        return frozenset(
+            (cube.grid_x, cube.grid_z)
+            for cube in self._cubes
+            if cube.grid_z == front_edge_z + 1
+        )
 
     # --- Rendering hand-off --------------------------------------------------
 

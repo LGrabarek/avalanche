@@ -12,8 +12,9 @@ Step 5A additions:
     by capturing the approaching cube.
   * `on_tick(player, wave)` — called when a tick fires; accumulates avalanche
     penalties. Also a safety-net crush check for direct-spawn edge cases.
-  * `_trigger_avalanche(player, wave)` — drops tick interval to
-    AVALANCHE_TICK_INTERVAL, crushes the player, clears the mark, fires shake.
+  * `_trigger_avalanche(player, wave)` — drops tick interval to the stage-
+    appropriate `_cur_avalanche_tick_interval`, crushes the player, clears
+    the mark, fires shake. (Step 21 replaced the hardcoded constant.)
 
 Step 6A additions:
   * `_wave_penalty` — counts missed NORMAL/ADVANTAGE cubes during WAVE_ACTIVE.
@@ -83,19 +84,33 @@ Step 9A additions:
   * `wave_index` / `wave_count` / `iq_score` properties for HUD + VICTORY overlay.
   * `on_tick` now transitions WAVE_ACTIVE → next wave directly when
     `wave.cube_count == 0` (no longer only reachable through AVALANCHE).
+
+Step 21 additions:
+  * `_cur_tick_interval` property — returns `STAGE_TICK_INTERVALS[stage_index]`
+    (clamped to table length), the normal tick speed for the current stage.
+  * `_cur_avalanche_tick_interval` property — same for avalanche speed.
+  * `_spawn_wave()` sets `wave.tick_interval` after `reset_for_new_wave()` so
+    WaveManager never needs to know which stage is active.
+  * `_trigger_avalanche()`, `set_turbo()`, `on_menu_open()` replaced the
+    Stage-1-only constants with calls to the new stage-aware properties.
 """
 
 import random
 
+from audio import AudioSystem
 from constants import (
-    AVALANCHE_TICK_INTERVAL,
     CRUSH_TUMBLE_THRESHOLD,
     CUBE_TYPES,
+    END_SCREEN_HOLD,
     IQ_DIFFICULTY_MULTIPLIERS,
     IQ_PERCENTAGE_MULTIPLIERS,
     PENALTY_THRESHOLD,
     PERFECT_BONUS_MAX,
     SCORE_ROW_SURVIVAL,
+    STAGE_AVALANCHE_TICK_INTERVALS,
+    STAGE_TICK_INTERVALS,
+    TICK_SPEED_DECAY,
+    TURBO_TICK_INTERVAL,
     WAVE_RISING_DURATION,
     CubeBehavior,
     CubeType,
@@ -105,7 +120,7 @@ from constants import (
 from effects import FlashEffects
 from grid_manager import GridManager
 from player import Player
-from wave_data import WaveData
+from wave_data import STAGES, WaveData
 from wave_manager import Cube, WaveManager
 
 
@@ -141,10 +156,12 @@ class GameManager:
         grid: GridManager,
         wave: WaveManager,
         effects: FlashEffects,
+        audio: AudioSystem | None = None,
     ) -> None:
         self._grid: GridManager = grid
         self._wave: WaveManager = wave
         self._effects: FlashEffects = effects
+        self._audio: AudioSystem | None = audio
         self._score: int = 0
         self._phase: GamePhase = GamePhase.WAVE_ACTIVE
         self._wave_penalty: int = 0      # Missed NORMAL/ADVANTAGE cubes during WAVE_ACTIVE.
@@ -152,6 +169,7 @@ class GameManager:
         # Wave progression state — populated by start_first_wave().
         self._waves: tuple[WaveData, ...] = ()
         self._wave_index: int = 0
+        self._stage_index: int = 0       # 0-based index into STAGES master table.
         self._iq_score: int = 0
         # Per-wave Perfect tracking — reset by _spawn_wave() at each wave start.
         self._forbidden_captured: bool = False   # Any FORBIDDEN captured this wave?
@@ -161,6 +179,11 @@ class GameManager:
         # Between-wave display state — set by _on_wave_cleared, reset by _spawn_wave.
         self._wave_rising_timer: float = 0.0     # Countdown for WAVE_RISING phase.
         self._perfect_display: bool = False      # Show PERFECT! banner in WAVE_RISING.
+        # Pause menu state — _pre_menu_phase stores the phase to restore on close.
+        self._pre_menu_phase: GamePhase = GamePhase.WAVE_ACTIVE
+        # End-screen hold timer — counts up from 0 on entry to GAME_OVER/VICTORY.
+        # Restart key is blocked until this reaches END_SCREEN_HOLD seconds.
+        self._end_hold_elapsed: float = 0.0
         assert self._score == 0, "score must start at zero"
         assert self._phase == GamePhase.WAVE_ACTIVE, "phase must start WAVE_ACTIVE"
 
@@ -195,6 +218,11 @@ class GameManager:
         return len(self._waves)
 
     @property
+    def stage_index(self) -> int:
+        """0-based index of the currently active stage."""
+        return self._stage_index
+
+    @property
     def iq_score(self) -> int:
         """Final I.Q. score. Populated when phase transitions to VICTORY."""
         return self._iq_score
@@ -204,23 +232,61 @@ class GameManager:
         """True during WAVE_RISING when the just-cleared wave was Perfect."""
         return self._perfect_display
 
+    @property
+    def end_hold_ready(self) -> bool:
+        """True once the end-screen hold has elapsed (GAME_OVER / VICTORY).
+
+        The restart key is ignored until this returns True, preventing accidental
+        skips when the end condition fires mid-keypress.
+        """
+        return self._end_hold_elapsed >= END_SCREEN_HOLD
+
+    # --- Stage-indexed tick interval helpers ---------------------------------
+
+    @property
+    def _cur_tick_interval(self) -> float:
+        """Normal wave tick interval for the active stage.
+
+        All stages use STAGE_TICK_INTERVALS[0] as the base.
+        Stages 1 and 2 (i=0, i=1) share the base interval because i // 2 = 0
+        for both.  A 10 % speed increase applies on every odd stage (3, 5, 7 …)
+        while even stages (4, 6, 8 …) hold the same interval as the stage before.
+        """
+        i = self._stage_index
+        result = STAGE_TICK_INTERVALS[0] * (TICK_SPEED_DECAY ** (i // 2))
+        assert result > 0.0, f"computed tick interval {result:.4f} is not positive"
+        return result
+
+    @property
+    def _cur_avalanche_tick_interval(self) -> float:
+        """Avalanche tick interval for the active stage (clamped to table)."""
+        idx = min(self._stage_index, len(STAGE_AVALANCHE_TICK_INTERVALS) - 1)
+        return STAGE_AVALANCHE_TICK_INTERVALS[idx]
+
     # --- Per-frame update (timers) -------------------------------------------
 
     def update(self, dt: float, player: Player) -> None:
         """Advance phase timers. Must be called every frame from main.py.
 
-        Currently handles only WAVE_RISING: counts down the between-wave pause
-        and triggers `_spawn_wave` when the timer expires. No-ops in all other
-        phases so it is safe to call unconditionally each frame.
+        WAVE_RISING: counts down the between-wave pause; spawns the wave on expiry.
+        GAME_OVER / VICTORY: counts up the end-screen hold that gates the restart
+          key for END_SCREEN_HOLD seconds, preventing accidental instant skips.
+        No-ops in all other phases so it is safe to call unconditionally each frame.
         """
         if dt < 0.0:
             raise ValueError(f"dt must be non-negative, got {dt}")
-        if self._phase != GamePhase.WAVE_RISING:
-            return
-        self._wave_rising_timer = max(0.0, self._wave_rising_timer - dt)
-        assert self._wave_rising_timer >= 0.0, "wave rising timer went negative"
-        if self._wave_rising_timer == 0.0:
-            self._spawn_wave(player)
+        if self._phase == GamePhase.WAVE_RISING:
+            self._wave_rising_timer = max(0.0, self._wave_rising_timer - dt)
+            assert self._wave_rising_timer >= 0.0, "wave rising timer went negative"
+            if self._wave_rising_timer == 0.0:
+                self._spawn_wave(player)
+        elif self._phase in (
+            GamePhase.GAME_OVER, GamePhase.VICTORY, GamePhase.STAGE_CLEAR,
+        ):
+            self._end_hold_elapsed = min(self._end_hold_elapsed + dt, END_SCREEN_HOLD)
+            assert 0.0 <= self._end_hold_elapsed <= END_SCREEN_HOLD, (
+                "end-screen hold elapsed out of [0, END_SCREEN_HOLD] bounds"
+            )
 
     # --- Per-frame crush check -----------------------------------------------
 
@@ -344,6 +410,67 @@ class GameManager:
             if self._phase == GamePhase.GAME_OVER:  # type: ignore[comparison-overlap]  # _execute_blast may mutate _phase to GAME_OVER
                 return
 
+    # --- Turbo -------------------------------------------------------------------
+
+    def set_turbo(self, enabled: bool) -> None:
+        """Enable or disable the turbo wave-tick speed.
+
+        Only takes effect during WAVE_ACTIVE.  During AVALANCHE the tick
+        interval is already at AVALANCHE_TICK_INTERVAL (0.15 s) — speeding it
+        up further would be nonsensical.  During all other phases there is no
+        active wave to accelerate.
+
+        The WaveManager.tick_interval setter resets _tick_elapsed when the new
+        interval is shorter than the elapsed time, preventing overshoot.
+        """
+        if self._phase != GamePhase.WAVE_ACTIVE:
+            return
+        self._wave.tick_interval = TURBO_TICK_INTERVAL if enabled else self._cur_tick_interval
+
+    # --- Pause menu ----------------------------------------------------------
+
+    # Phases from which the pause menu may NOT be opened.
+    _MENU_BLOCKED: frozenset[GamePhase] = frozenset({
+        GamePhase.TITLE, GamePhase.GAME_OVER, GamePhase.VICTORY,
+        GamePhase.STAGE_CLEAR, GamePhase.MENU,
+    })
+
+    def on_menu_open(self) -> None:
+        """Open the pause menu, freezing all gameplay.
+
+        No-op when already in a non-pauseable phase (TITLE, end-screens, MENU).
+        Clears any active turbo so the wave doesn't resume at accelerated speed
+        when the menu closes; the player must re-press the turbo key after resuming.
+        """
+        if self._phase in GameManager._MENU_BLOCKED:
+            return
+        if self._phase == GamePhase.WAVE_ACTIVE:
+            self._wave.tick_interval = self._cur_tick_interval  # clear any active turbo
+        self._pre_menu_phase = self._phase
+        self._phase = GamePhase.MENU
+
+    def on_menu_close(self) -> None:
+        """Close the pause menu, restoring the phase that was active when it opened."""
+        if self._phase != GamePhase.MENU:
+            return
+        self._phase = self._pre_menu_phase
+
+    def on_menu_select(self, item: int, player: Player) -> None:
+        """Execute the selected menu item.  0 = Resume, 1 = Restart.
+
+        No-op when not in MENU phase so stray calls are harmless.
+        Restart performs a full game reset identical to on_restart_key.
+        """
+        if self._phase != GamePhase.MENU:
+            return
+        if item == 0:
+            self.on_menu_close()
+        elif item == 1:
+            assert len(STAGES) > 0, "STAGES must not be empty"
+            self._do_restart(player)
+        else:
+            raise ValueError(f"unknown menu item index {item} — expected 0 or 1")
+
     # --- Phase transitions (player-initiated) ---------------------------------
 
     def on_title_advance(self) -> None:
@@ -367,7 +494,7 @@ class GameManager:
         self._phase = GamePhase.AVALANCHE
         self._had_avalanche = True  # disqualifies Perfect for this wave
         player.crush()
-        wave.tick_interval = AVALANCHE_TICK_INTERVAL
+        wave.tick_interval = self._cur_avalanche_tick_interval
         self._grid.clear_mark()
         self._effects.trigger_shake(amplitude=10.0, duration=0.6)
 
@@ -397,6 +524,8 @@ class GameManager:
                 if self._wave_penalty >= PENALTY_THRESHOLD:
                     self._wave_penalty -= PENALTY_THRESHOLD
                     _ = self._grid.delete_front_row()  # unused: _check_game_over covers outcome
+                    if self._audio is not None:
+                        self._audio.play_row_delete()
                     self._check_game_over(player)
                     if self._phase == GamePhase.GAME_OVER:
                         return
@@ -416,6 +545,8 @@ class GameManager:
         for _ in range(deletions):
             self._avalanche_penalty -= PENALTY_THRESHOLD
             _ = self._grid.delete_front_row()  # unused bool: _check_game_over covers outcome
+            if self._audio is not None:
+                self._audio.play_row_delete()
             self._check_game_over(player)
             if self._phase == GamePhase.GAME_OVER:
                 return
@@ -424,7 +555,10 @@ class GameManager:
     def _check_game_over(self, player: Player) -> None:
         """Transition to GAME_OVER when the player's tile has been voided."""
         if not self._grid.is_valid_position(player.grid_x, player.grid_z):
+            self._end_hold_elapsed = 0.0  # fresh countdown on end-screen entry
             self._phase = GamePhase.GAME_OVER
+            if self._audio is not None:
+                self._audio.play_game_over()
 
     def _execute_blast(self, cx: int, cz: int, player: Player) -> None:
         """Execute one blast at visual tile `(cx, cz)`.
@@ -452,15 +586,22 @@ class GameManager:
         if behavior == CubeBehavior.SCORE:
             self._score += info["chain_score"]
             self._wave.remove_cube(cube)
-            self._effects.spawn_flash(cx, cz)
+            self._effects.spawn_flash(cx, cz, cube.cube_type)
+            if self._audio is not None:
+                self._audio.play_detonation()
         elif behavior == CubeBehavior.DETONATE_3X3:
             self._score += info["chain_score"]
             self._wave.remove_cube(cube)
-            self._effects.spawn_flash(cx, cz)
+            self._effects.spawn_flash(cx, cz, cube.cube_type)
             self._mark_trap_area(cx, cz)  # armed; player presses Z to detonate
+            if self._audio is not None:
+                self._audio.play_detonation()
         elif behavior == CubeBehavior.ROW_DELETE:
             self._wave.remove_cube(cube)
             _ = self._grid.delete_front_row()  # unused: _check_game_over covers it
+            if self._audio is not None:
+                self._audio.play_forbidden_buzz()  # penalty: Forbidden cube in blast
+                self._audio.play_row_delete()       # consequence: row erased
             self._check_game_over(player)
             self._forbidden_captured = True  # disqualifies Perfect for this wave
         else:
@@ -507,21 +648,26 @@ class GameManager:
         if behavior == CubeBehavior.SCORE:
             self._score += info["capture_score"]
             self._wave.remove_cube(cube)
-            self._effects.spawn_flash(mx, mz)  # success: white ring confirms capture
+            self._effects.spawn_flash(mx, mz, cube.cube_type)  # tint matches cube
+            if self._audio is not None:
+                self._audio.play_capture()
             return TriggerOutcome.CAPTURED_SCORE
         if behavior == CubeBehavior.CREATE_TRAP:
             self._wave.remove_cube(cube)
             self._mark_trap_area(mx, mz)  # marks the full 3×3 around the capture tile
-            self._effects.spawn_flash(mx, mz)  # success: white ring confirms capture
+            self._effects.spawn_flash(mx, mz, cube.cube_type)  # tint matches cube
+            if self._audio is not None:
+                self._audio.play_capture()
             return TriggerOutcome.CAPTURED_TRAP
         if behavior == CubeBehavior.ROW_DELETE:
             self._wave.remove_cube(cube)
             _ = self._grid.delete_front_row()  # unused: _check_game_over covers outcome
+            if self._audio is not None:
+                self._audio.play_forbidden_buzz()
             self._check_game_over(player)
             self._forbidden_captured = True  # disqualifies Perfect for this wave
             # No flash: a FORBIDDEN capture is a mistake. A success ring would
-            # mislead the player into thinking they scored. Step 10 may add a
-            # distinct red flash here; for now silence is the correct signal.
+            # mislead the player into thinking they scored.
             return TriggerOutcome.CAPTURED_FORBIDDEN
         raise ValueError(
             f"unhandled on_capture behavior {behavior!r} for cube type "
@@ -550,30 +696,90 @@ class GameManager:
     def on_restart_key(self, player: Player) -> None:
         """Reset all game state and return to TITLE on any key during GAME_OVER/VICTORY.
 
-        No-op in every other phase so stray keypresses are harmless. Resets the
-        grid, wave, effects, and player first (in dependency order), then resets
-        the manager's own fields, then calls start_first_wave to re-enter TITLE.
+        No-op in every other phase so stray keypresses are harmless. Also no-op
+        during the initial END_SCREEN_HOLD seconds to prevent accidental restarts
+        triggered by a key held at the moment the end screen appears.
         """
         if self._phase not in (GamePhase.GAME_OVER, GamePhase.VICTORY):
             return
-        assert len(self._waves) > 0, "waves empty at restart — start_first_wave was never called"
-        waves = self._waves
-        self._grid.reset()                   # must come before player.reset()
-        self._wave.reset_for_new_wave()      # clear stale cubes immediately so they
-        # are not rendered during the TITLE / WAVE_RISING screens.  _spawn_wave also
-        # calls reset_for_new_wave when the WAVE_RISING timer expires; the double call
-        # is intentional — without this one, old cubes remain visible during the 2 s
-        # between-wave pause and the title screen.
-        self._effects.reset()                # clear flashes and shake
-        player.reset()                       # teleport back to spawn
-        self._reset_state()
-        self.start_first_wave(player, waves)
+        if self._end_hold_elapsed < END_SCREEN_HOLD:
+            return  # hold not yet elapsed; ignore this keypress
+        assert len(STAGES) > 0, "STAGES must not be empty"
+        self._do_restart(player)
+
+    def on_stage_clear_key(self, player: Player) -> None:
+        """Advance to the next stage on any key during STAGE_CLEAR.
+
+        No-op until the end-screen hold has elapsed, preventing accidental
+        skips when the last wave clears mid-keypress. Calls _on_stage_complete
+        which resets subsystems and enters WAVE_RISING for the new stage.
+        """
+        if self._phase != GamePhase.STAGE_CLEAR:
+            return
+        if self._end_hold_elapsed < END_SCREEN_HOLD:
+            return
+        self._on_stage_complete(player)
+
+    def _on_stage_complete(self, player: Player) -> None:
+        """Transition into the next stage: reset subsystems, enter WAVE_RISING.
+
+        Increments _stage_index, resets the grid/wave/effects/player for a
+        fresh board, clears all per-wave tracking fields, and sets up the new
+        stage's wave sequence. Score carries over (not reset) so the cumulative
+        total is visible in the VICTORY screen at the end of the final stage.
+        """
+        if self._audio is not None:
+            self._audio.play_wave_clear()   # brief fanfare as the new stage begins
+        self._stage_index += 1
+        assert self._stage_index < len(STAGES), (
+            f"stage_index {self._stage_index} out of range [0, {len(STAGES)})"
+        )
+        # Reset the board for the new stage.
+        self._grid.reset()
+        self._wave.reset_for_new_wave()
+        self._wave.tick_interval = self._cur_tick_interval  # arm new stage's speed
+        self._effects.reset()
+        player.reset()
+        # Reset per-wave and per-stage tracking; score is cumulative.
+        self._wave_index = 0
+        self._wave_penalty = 0
+        self._avalanche_penalty = 0
+        self._forbidden_captured = False
+        self._had_avalanche = False
+        self._player_steps = 0
+        self._wave_total_misses = 0
+        self._perfect_display = False
+        self._end_hold_elapsed = 0.0
+        # Arm the new stage's wave list and start the between-wave countdown.
+        self._waves = STAGES[self._stage_index]
+        self._wave_rising_timer = WAVE_RISING_DURATION
+        self._phase = GamePhase.WAVE_RISING
+
+    def _do_restart(self, player: Player) -> None:
+        """Full reset sequence shared by on_restart_key and on_menu_select (Restart).
+
+        Always restarts from Stage 1 (STAGES[0]) regardless of which stage the
+        player was on. Resets grid, wave, effects, and player in dependency
+        order (grid first so player.reset() finds a valid spawn tile), then
+        zeroes the manager's own fields, then enters TITLE via start_first_wave.
+
+        The wave.reset_for_new_wave() call here clears stale cubes immediately
+        so none are rendered during the TITLE / WAVE_RISING screens. _spawn_wave
+        also calls it when the timer expires; the double call is intentional.
+        """
+        assert len(STAGES) > 0, "STAGES must not be empty"
+        self._grid.reset()               # must come before player.reset()
+        self._wave.reset_for_new_wave()  # clear stale cubes before TITLE renders
+        self._effects.reset()            # clear flashes and shake
+        player.reset()                   # teleport back to spawn
+        self._reset_state()              # resets _stage_index to 0
+        self.start_first_wave(player, STAGES[0])
 
     def _reset_state(self) -> None:
         """Zero every per-game field back to the same values as __init__.
 
-        Called exclusively from on_restart_key. Does NOT reset grid, wave,
-        player, or effects — the caller handles those in the correct order.
+        Called from _do_restart (end-screen and in-menu paths). Does NOT reset
+        grid, wave, player, or effects — the caller handles those in order.
         """
         self._score = 0
         self._iq_score = 0
@@ -582,14 +788,18 @@ class GameManager:
         self._avalanche_penalty = 0
         self._waves = ()
         self._wave_index = 0
+        self._stage_index = 0
         self._forbidden_captured = False
         self._had_avalanche = False
         self._player_steps = 0
         self._wave_total_misses = 0
         self._wave_rising_timer = 0.0
         self._perfect_display = False
+        self._pre_menu_phase = GamePhase.WAVE_ACTIVE
+        self._end_hold_elapsed = 0.0
         assert self._score == 0, "score not zeroed after _reset_state"
         assert self._wave_index == 0, "wave_index not zeroed after _reset_state"
+        assert self._stage_index == 0, "stage_index not zeroed after _reset_state"
 
     def _spawn_wave(self, player: Player) -> None:
         """Spawn the current wave index's cubes and reset all per-wave state.
@@ -614,6 +824,7 @@ class GameManager:
         # Restore player and subsystem state for the new wave.
         player.uncrush()
         self._wave.reset_for_new_wave()
+        self._wave.tick_interval = self._cur_tick_interval  # stage-correct speed
         self._grid.clear_mark()
         # Spawn cubes — 50% mirror-flip doubles effective pattern variety.
         mirror = random.random() < 0.5
@@ -634,6 +845,8 @@ class GameManager:
         spawns the next wave or transitions to VICTORY.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
+        if self._audio is not None:
+            self._audio.play_wave_clear()
         wave_data = self._waves[self._wave_index]
         is_perfect = (
             not self._had_avalanche
@@ -650,9 +863,14 @@ class GameManager:
         self._perfect_display = is_perfect
         next_index = self._wave_index + 1
         if next_index >= len(self._waves):
-            # All waves complete — compute final I.Q. and enter VICTORY.
-            self._iq_score = self._calculate_final_iq()
-            self._phase = GamePhase.VICTORY
+            self._end_hold_elapsed = 0.0  # fresh countdown on end-screen entry
+            if self._stage_index >= len(STAGES) - 1:
+                # Final stage complete — compute I.Q. and enter VICTORY.
+                self._iq_score = self._calculate_final_iq()
+                self._phase = GamePhase.VICTORY
+            else:
+                # More stages available — show the between-stage screen.
+                self._phase = GamePhase.STAGE_CLEAR
             return
         self._wave_index = next_index
         self._wave_rising_timer = WAVE_RISING_DURATION
@@ -694,8 +912,10 @@ class GameManager:
                 surviving_rows += 1
         row_bonus = surviving_rows * SCORE_ROW_SURVIVAL
         total = self._score + row_bonus
-        difficulty = IQ_DIFFICULTY_MULTIPLIERS[0]
-        iq_pct = IQ_PERCENTAGE_MULTIPLIERS[0]
+        diff_idx = min(self._stage_index, len(IQ_DIFFICULTY_MULTIPLIERS) - 1)
+        pct_idx = min(self._stage_index, len(IQ_PERCENTAGE_MULTIPLIERS) - 1)
+        difficulty = IQ_DIFFICULTY_MULTIPLIERS[diff_idx]
+        iq_pct = IQ_PERCENTAGE_MULTIPLIERS[pct_idx]
         result = int(total * difficulty * iq_pct)
         assert result >= 0, "IQ score went negative — logic error"
         return result

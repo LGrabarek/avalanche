@@ -5,10 +5,13 @@ When resuming after a break, read this file first to understand the current stat
 
 ---
 
-## Status: Step 12 — GitHub Pages deployment — Phase A AWAITING USER
+## Status: PLAN COMPLETE ✓
 
-Post-v1 enhancements in progress (Steps 12–25). See `docs/PLAN.md` (post-v1 section)
-for full specs; see the step tracker below for current status of all steps.
+All 25 steps implemented and approved. The game is a fully playable browser PWA with:
+procedural audio, Stage 2, bundled font, HUD caching, particle captures, face shading,
+checkerboard grid, player shadow, danger telegraph, turbo key, Esc pause menu, transition
+holds, camera rework, and movement priority — all shipping on top of the original
+Steps 1–11 core game. See the step tracker below for the full history.
 
 **Step 9 Phase A log:**
 
@@ -86,20 +89,20 @@ Steps 3+ are split into **Phase A (Development)** and **Phase B (Testing)** per 
 | 9 | Wave progression + Perfect bonus | APPROVED | APPROVED | APPROVED 2026-04-25 |
 | 10 | Polish | APPROVED 2026-04-26 | APPROVED 2026-04-26 | APPROVED 2026-04-26 |
 | 11 | PWA packaging | APPROVED 2026-04-27 | APPROVED 2026-04-27 | APPROVED 2026-04-27 |
-| 12 | GitHub Pages deployment (CI/CD) | AWAITING USER | NOT STARTED | IN PROGRESS |
-| 13 | Turbo / accelerate key | NOT STARTED | NOT STARTED | NOT STARTED |
-| 14 | Esc pause menu (restart + options) | NOT STARTED | NOT STARTED | NOT STARTED |
-| 15 | Capture animation + flash colour tinting | NOT STARTED | NOT STARTED | NOT STARTED |
-| 16 | Enhanced graphics — face shading + camera | NOT STARTED | NOT STARTED | NOT STARTED |
-| 17 | HUD font render caching | NOT STARTED | NOT STARTED | NOT STARTED |
-| 18 | Transition hold animations | NOT STARTED | NOT STARTED | NOT STARTED |
-| 19 | Grid texture + player shadow + danger telegraph | NOT STARTED | NOT STARTED | NOT STARTED |
-| 20 | Additional stages (Stage 2+) | NOT STARTED | NOT STARTED | NOT STARTED |
-| 21 | Per-stage tick interval table | NOT STARTED | NOT STARTED | NOT STARTED |
-| 22 | Bundled `.ttf` font | NOT STARTED | NOT STARTED | NOT STARTED |
-| 23 | Movement perpendicular priority | NOT STARTED | NOT STARTED | NOT STARTED |
-| 24 | Camera rework | NOT STARTED | NOT STARTED | NOT STARTED |
-| 25 | Audio system | NOT STARTED | NOT STARTED | NOT STARTED |
+| 12 | GitHub Pages deployment (CI/CD) | APPROVED 2026-04-28 | APPROVED 2026-04-28 | APPROVED 2026-04-28 |
+| 13 | Turbo / accelerate key | APPROVED 2026-04-28 | APPROVED 2026-04-28 | APPROVED 2026-04-28 |
+| 14 | Esc pause menu (restart + options) | APPROVED 2026-04-28 | APPROVED 2026-04-28 | APPROVED 2026-04-28 |
+| 15 | Capture animation + flash colour tinting | APPROVED 2026-04-29 | APPROVED 2026-04-29 | APPROVED 2026-04-29 |
+| 16 | Enhanced graphics — face shading + camera | APPROVED 2026-04-29 | APPROVED 2026-04-29 | APPROVED 2026-04-29 |
+| 17 | HUD font render caching | APPROVED 2026-04-30 | APPROVED 2026-04-30 | APPROVED 2026-04-30 |
+| 18 | Transition hold animations | APPROVED 2026-04-30 | APPROVED 2026-04-30 | APPROVED 2026-04-30 |
+| 19 | Grid texture + player shadow + danger telegraph | APPROVED 2026-05-01 | APPROVED 2026-05-01 | APPROVED 2026-05-01 |
+| 20 | Additional stages (Stage 2+) | APPROVED 2026-05-02 | APPROVED 2026-05-02 | APPROVED 2026-05-02 |
+| 21 | Per-stage tick interval table | APPROVED 2026-05-02 | APPROVED 2026-05-02 | APPROVED 2026-05-02 |
+| 22 | Bundled `.ttf` font | APPROVED 2026-05-02 | APPROVED 2026-05-02 | APPROVED 2026-05-02 |
+| 23 | Movement perpendicular priority | APPROVED 2026-05-02 | APPROVED 2026-05-02 | APPROVED 2026-05-02 |
+| 24 | Camera rework | APPROVED 2026-05-03 | APPROVED 2026-05-03 | APPROVED 2026-05-03 |
+| 25 | Audio system | APPROVED 2026-05-06 | APPROVED 2026-05-06 | APPROVED 2026-05-06 |
 
 **Phase A values:** `NOT STARTED` → `IN PROGRESS` → `AWAITING USER` (code done, panel clean, STEP<N>_REVIEW.md written).
 **Phase B values:** `NOT STARTED` → `IN PROGRESS` (user testing / fix cycle) → `APPROVED <date>`.
@@ -645,3 +648,471 @@ checks (all panel fixes verified). Tooling: ruff + mypy --strict clean (12 files
 
 Post-approval fix: manifest description changed to "Retro puzzle game"
 (removed third-party IP reference).
+
+### Session — 2026-04-28 — Step 13 APPROVED + Step 14 Phase A (Esc pause menu)
+
+**Step 13 approved by user 2026-04-28.**
+
+---
+
+### Session — 2026-04-28 — Step 14 Phase A (Esc pause menu)
+
+**Changed files:**
+- `constants.py` — `TURBO_TICK_INTERVAL: float = 0.25` (between normal 1.2 s and
+  avalanche 0.15 s); `KEY_TURBO: int = pygame.K_f`.
+- `game_manager.py` — imported `TICK_INTERVAL` + `TURBO_TICK_INTERVAL`; added
+  `set_turbo(enabled: bool)`: guards on `phase == WAVE_ACTIVE`; calls
+  `self._wave.tick_interval = TURBO_TICK_INTERVAL if enabled else TICK_INTERVAL`.
+- `main.py` — imported `KEY_TURBO`; wired `KEYDOWN F` → `set_turbo(True)`,
+  `KEYUP F` → `set_turbo(False)`, and `ACTIVEEVENT gain=0` → `set_turbo(False)`
+  (Platform Engineer fix: prevents stuck-turbo when KEYUP is lost on tab blur).
+- `hud.py` — hint line updated: `"…   Detonate: Z   Turbo: F"`.
+
+**Expert panel:**
+- Vision Lead: APPROVED — 0.25 s interval well-calibrated; hold-to-turbo correct UX.
+- Code Quality: APPROVED — KEYUP outside pause guard is intentional and safe.
+- UX Tester: APPROVED — all edge cases (phase transitions, avalanche, pause) handled.
+- Platform Engineer: CONCERNS → APPROVED — added `set_turbo(False)` on focus-loss
+  to prevent stuck-turbo from lost KEYUP events on tab switch in WASM.
+  Fix 3 (reset in `_reset_state`) not needed: `reset_for_new_wave()` already resets
+  `_tick_interval = TICK_INTERVAL`.
+
+**Smoke tests:** 5/5 checks (enable/disable, idempotency, focus-loss clear, TITLE
+no-op, `reset_for_new_wave` restores interval). Tooling: ruff + mypy --strict clean.
+
+`docs/STEP13_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-28 — Step 14 Phase A (Esc pause menu)
+
+**Changed files:**
+- `constants.py` — `GamePhase.MENU = "menu"`.
+- `game_manager.py` — `_pre_menu_phase` field; `_MENU_BLOCKED` class frozenset;
+  `on_menu_open()` (blocked from TITLE/GAME_OVER/VICTORY/MENU, clears turbo from
+  WAVE_ACTIVE, saves pre-menu phase); `on_menu_close()` (restores phase);
+  `on_menu_select(item, player)` (0=Resume→close, 1=Restart→full reset);
+  `_do_restart(player, waves)` extracted from `on_restart_key` and shared with
+  `on_menu_select`; `_reset_state()` zeroes `_pre_menu_phase`.
+- `main.py` — `MENU_ITEMS = ("RESUME", "RESTART")`, `MENU_ITEM_COUNT = 2`;
+  `_drain_events` gains `menu_selected: int` param and returns `tuple[bool, bool, int]`;
+  Esc in gameplay → `on_menu_open()`; Esc/↑↓/WS/X/Enter in MENU phase → navigate/confirm;
+  `_draw_menu_overlay(screen, big_font, small_font, selected)` — dark veil + PAUSED
+  heading + gold-highlighted items + hint line; MENU added to frozen set; overlay
+  dispatch updated.
+
+**Expert panel:** All 4 reviewers APPROVED outright. Code Quality noted `_drain_events`
+total span is 62 lines but code-only body is 39 (Rule 4 counts only code lines, not
+docstring/blanks/comments). `_MENU_BLOCKED: frozenset[GamePhase]` confirmed correct
+mypy --strict. Platform Engineer confirmed SRCALPHA allocation acceptable (menu is
+low-frequency), Esc no browser conflict (not fullscreen), game.update() safe no-op
+during MENU phase.
+
+**Smoke tests:** 9/9 checks (TITLE block, open/close round-trip, turbo cleared,
+AVALANCHE interval preserved, Resume, Restart→TITLE, invalid item raises, no-op
+outside MENU, _reset_state zeroes field).
+
+`docs/STEP14_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-29 — Step 14 APPROVED + Step 15 Phase A (particle burst + flash tinting)
+
+**Step 14 approved by user 2026-04-29.**
+
+**Changed files:**
+- `effects.py` — Full rewrite. New `_Particle` dataclass (angle, speed, life, max_life,
+  color). `_Flash` gains `cube_type: CubeType` and `particles: list[_Particle]`.
+  `spawn_flash(grid_x, grid_z, cube_type)` generates 10 (NORMAL/FORBIDDEN) or 16
+  (ADVANTAGE) radially-distributed particles with random jitter ±0.3 rad and random
+  speed in [60%, 100%] of tier max. `update()` decrements particle life, evicts dead
+  particles, evicts empty flashes. `draw()` projects tile origin once per flash via
+  `_VertexProjector` Protocol; computes particle screen position as
+  `origin + (cos(angle)*speed*t, sin(angle)*speed*t)`; fades color by
+  `alpha_frac = life/max_life`. Added `oy` bounds assert in `shake_offset()` (Rule 5
+  fix, Platform Engineer finding).
+  ADVANTAGE colour changed to (160, 255, 100) bright yellow-green (Vision Lead fix:
+  separates from ADVANTAGE_TRAP tile (80, 200, 80); colour delta = 155).
+  Inline comment moved to preceding line to stay ≤100 chars (Code Quality fix, ruff E501).
+- `game_manager.py` — 4 `spawn_flash` call sites updated to pass `cube.cube_type` as
+  third argument: `_execute_blast` SCORE + DETONATE_3X3, `_dispatch_capture` SCORE +
+  CREATE_TRAP. ROW_DELETE (FORBIDDEN) path deliberately emits no flash.
+
+**Expert panel:**
+- Vision Lead: APPROVED WITH FIX — ADVANTAGE color too close to trap tile; changed to
+  (160, 255, 100).
+- Code Quality: APPROVED AFTER FIX — line 54 was 116 chars (ruff E501); comment moved.
+  All Power of Ten rules satisfied.
+- UX Tester: APPROVED — 0.30–0.55 s particles read cleanly at 1.2 s ticks; FORBIDDEN
+  silence correctly communicates penalty; ADVANTAGE differentiation (16 vs 10 particles,
+  220 vs 150 px/s) legible; 3×3 blast reads as satisfying explosion.
+- Platform Engineer: APPROVED WITH FIX — `oy` bounds assert missing in `shake_offset()`
+  (Rule 5 gap); added. All WASM compatibility confirmed; 144 circles worst case is
+  ~0.3% of 33ms frame budget.
+
+**Smoke tests:** all checks pass (spawn counts, colour correctness, cap enforcement,
+particle eviction timing, shake decay, ADVANTAGE colour delta vs trap tile = 155).
+Tooling: ruff + mypy --strict clean on `effects.py` and `game_manager.py`.
+
+`docs/STEP15_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-30 — Step 15 APPROVED + Step 16 Phase A (face shading + camera tuning)
+
+**Step 15 approved by user 2026-04-30.**
+
+**Changed files:**
+- `constants.py` — Added `FACE_TOP_MULT=1.00`, `FACE_RIGHT_MULT=0.75`, `FACE_LEFT_MULT=0.55`,
+  `FACE_BOTTOM_MULT=0.40`, `FACE_MULTS` tuple (6 entries, indexed to match `_CUBE_FACES`).
+  Changed `CubeTypeInfo`: removed `colors: dict[str, ColorRGB]`, added `base_color: ColorRGB`.
+  Simplified `CUBE_TYPES` entries: each type now has one `base_color` instead of 5-key dict.
+  Raised `CAMERA_POS` Y from 12.0 → 13.0 (elevation 23.2° → 24.9°).
+  Changed ADVANTAGE edge from (0,255,0) → (0,200,0) (reduces halation).
+- `cube_data.py` — Added `FACE_MULTS` import. Rewrote `get_cube_faces()`: builds
+  FaceDescriptors directly (bypassing `_build_faces`); derives shaded colour per face as
+  `int(base[channel] * FACE_MULTS[face_idx])` — int() truncation intentional (positive
+  values only, ≤1 unit difference vs round()). Updated stale docstrings on `_CUBE_FACES`
+  comment and `_build_faces` docstring (player-path only clarification).
+- `hud.py` — Fixed pre-existing ruff E501: hint text shortened from 101 → 79 chars.
+
+**Key design decision:** FORBIDDEN base (60,30,60) is intentionally near-black ("abyssal
+black texture" per research doc). Red 2px edge (180,0,0) is the primary hazard signal. Vision
+Lead flagged low face contrast; UX Tester confirmed edge-driven signal is sufficient. No change.
+
+**Expert panel:**
+- Vision Lead: APPROVED (conditional on FORBIDDEN intent = intentional dark) — confirmed.
+- Code Quality: APPROVED — two stale docstrings fixed; pre-existing E501 fixed.
+- UX Tester: APPROVED — ADVANTAGE 3D improvement confirmed (side faces 1.72:1 ratio);
+  advisory: NORMAL shadow face close to platform tile — monitor for future palette changes.
+- Platform Engineer: APPROVED — new int×float path is faster than old dict-lookup;
+  truncation comment added.
+
+**Smoke tests:** all pass (6 faces per cube type, top > front > shadow_side, lit > dark,
+camera elevation = 24.9°). Tooling: ruff + mypy --strict clean (12 files).
+
+`docs/STEP16_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-30 — Step 16 APPROVED + Step 17 Phase A (HUD font render caching)
+
+**Step 16 approved by user 2026-04-30.**
+
+**Changed files:**
+- `hud.py` — Added `MAX_HUD_CACHE_ENTRIES = 8`. Added `_cache: dict[str, tuple[str,
+  ColorRGB, pygame.Surface]]` (colour is part of the key — prevents stale surface if a
+  label's colour is ever changed at runtime). Added `_render(label, text, font, color)`
+  helper: returns cached surface on `(text, color)` match; re-renders on any change;
+  Rule 3 guard fires only on first insertion of a new label.
+  Refactored `_draw_stat_block` to iterate a `tuple[tuple[str, str], ...]` of
+  (label, text) pairs; added `assert len(stats) == 7` invariant.
+  Refactored `_draw_hint_line` to route through `_render`.
+  Extracted `pos` local variable in stat-block loop (line-length + Rule 9 clarity).
+  Added `# dirty rect unused; full redraw` comments to both `_ = screen.blit(...)` calls.
+  Added Rule-5 note to `_format_mark` docstring.
+  Updated hint text: added `Esc: Menu`, changed `Turbo: F` → `Turbo: hold F`; dropped
+  `/Arrows` and `/Enter` secondary bindings to stay within the 100-char line limit.
+
+**Performance:** saves ≈5–6 `font.render()` calls per frame under normal play (pos, score,
+penalty, wave, hint are cache-hit almost every frame). `fps` and `cubes`/tick-progress
+labels re-render every frame (text changes each frame — no false savings).
+
+**Expert panel:**
+- Vision Lead: APPROVED (conditional) — `color` not in cache key was latent bug; fixed.
+- Code Quality: APPROVED (conditional) — two `_ = screen.blit()` missing Rule 7 comments
+  (fixed); `_format_mark` branching outside strict ≤5-line no-branching exemption
+  (docstring note added).
+- UX Tester: APPROVED (conditional) — `Esc: Menu` absent from hint (added); "Turbo: F"
+  didn't communicate hold mechanic (changed to "Turbo: hold F").
+- Platform Engineer: APPROVED (conditional) — same color-key concern as Vision Lead
+  (fixed); confirmed WASM safety of long-lived Surface references; ~300 KB memory
+  footprint is negligible.
+
+**Smoke tests:** 8 tests pass — first render, same-text cache hit, text change re-renders,
+same-text/different-color re-renders (new T3), color change on full-capacity cache,
+overflow assert fires at MAX+1 new labels, update-existing-key does not grow cache.
+Tooling: ruff + mypy --strict clean (12 files).
+
+`docs/STEP17_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-30 — Step 17 APPROVED + Step 18 Phase A (transition hold animations)
+
+**Step 17 approved by user 2026-04-30.**
+
+**Also fixed this session:** ESC menu hint `↑↓  Navigate` replaced with `W/S or Up/Down  Navigate` (Unicode arrows rendered as boxes with the default pygame font).
+
+**Changed files (Step 18):**
+- `constants.py` — Added `END_SCREEN_HOLD: float = 2.0` (hold duration before restart
+  prompt is active on GAME_OVER/VICTORY overlays).
+- `game_manager.py` — Added `_end_hold_elapsed: float = 0.0` field. Updated `update()`
+  to advance hold timer in GAME_OVER/VICTORY phases (clamped at END_SCREEN_HOLD).
+  Added `end_hold_ready` property. Gated `on_restart_key()` to return early while hold
+  < END_SCREEN_HOLD. Reset `_end_hold_elapsed = 0.0` on GAME_OVER/VICTORY entry in
+  `_check_game_over()` and `_on_wave_cleared()`. Reset in `_reset_state()`.
+- `main.py` — Updated `_draw_game_over_overlay` and `_draw_victory_overlay` to accept
+  `hold_ready: bool`. Prompt always rendered ("Press any key to restart"), but dimmed
+  to (50,50,55) during hold and brightened to (140,140,140) when ready. Call sites pass
+  `game.end_hold_ready`.
+
+**Expert panel:**
+- Vision Lead: APPROVED (conditional) — empty string made overlay look frozen + layout
+  shifted; recommended dim text + reduce 3.0→2.0 s. Both applied.
+- UX Tester: APPROVED (conditional) — same dim-text fix required.
+- Code Quality: APPROVED — no issues.
+- Platform Engineer: APPROVED — float-safe clamp, DT_CLAMP interaction correct,
+  paused-gate behavior correct for WASM rAF-pause path.
+
+**Smoke tests:** 9/9 pass (hold blocked, timer advances, clamped, hold elapsed=restart
+allowed, VICTORY advances, _reset_state zeroes, _check_game_over resets timer, update
+no-ops in WAVE_ACTIVE). Tooling: ruff + mypy --strict clean (12 files).
+
+`docs/STEP18_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-04-30 — Step 18 APPROVED + Step 19 Phase A (grid texture + shadow + telegraph)
+
+**Step 18 approved by user 2026-04-30.**
+
+**Changed files (Step 19):**
+- `constants.py` — Added `TILE_CHECKER_DELTA: int = 8` (B3c parity lightening amount);
+  `DANGER_TOP_COLOR: ColorRGB = (255, 220, 0)` (B3e telegraph — saturated yellow,
+  orthogonal to all cube palettes + matches PERFECT! warning vocabulary).
+- `cube_data.py` — `get_tile_face()` branches on `(grid_x + grid_z) % 2`: PLATFORM tiles
+  with parity 1 compute a lightened fill via `min(255, c + TILE_CHECKER_DELTA)` per channel.
+  MARKED and ADVANTAGE_TRAP tiles unaffected.
+- `wave_manager.py` — New `danger_cubes(front_edge_z) -> frozenset[tuple[int,int]]`
+  method: returns grid positions of cubes at `grid_z == front_edge_z + 1` (one tick from
+  the front edge).
+- `main.py` — Added `SHADOW_COLOR = (30, 30, 40)`. Added `_draw_player_shadow()`: projects
+  4 player footprint corners at `y=0`, uses bounding box for `pygame.draw.ellipse()`.
+  Extended `_build_cube_faces()` with `danger: frozenset[tuple[int,int]]` param: face index 0
+  (top face) overridden to `DANGER_TOP_COLOR` for danger cubes. Split render into 3 passes:
+  grid+cubes+markers → shadow → player. Updated HUD face count.
+
+**Expert panel:**
+- Vision Lead: APPROVED (conditional) — `DANGER_TOP_COLOR = (255,255,255)` (white) too
+  close in luminance to player blue; changed to `(255,220,0)` (saturated yellow).
+- UX Tester: APPROVED (conditional) — `TILE_CHECKER_DELTA = 8` at perceptibility threshold;
+  verify visually, may need to bump to 12–14 if imperceptible in-browser.
+- Code Quality: APPROVED — all Power of Ten rules satisfied; mypy --strict + ruff clean.
+- Platform Engineer: APPROVED — two render passes within WASM budget; `z=-0.4` corner
+  safe (not near-plane clipped); all-void grid case returns empty frozenset correctly.
+
+**Smoke tests:** 9/9 pass (parity-0 unchanged, parity-1 lightened, MARKED unaffected,
+danger_cubes correct, negative front_edge_z error, empty wave, build function accepts
+danger frozenset, empty wave builds empty face list, danger cube top gets DANGER_TOP_COLOR).
+Tooling: ruff + mypy --strict clean (4 changed files).
+
+`docs/STEP19_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-05-02 — Step 19 APPROVED + Step 20 Phase A (Additional stages)
+
+**Step 19 approved by user 2026-05-02.**
+
+**Changed files (Step 20 — B5 Additional stages):**
+- `constants.py` — Added `GamePhase.STAGE_CLEAR = "stage_clear"` (between VICTORY and MENU).
+- `wave_data.py` — Added `_S2W1`–`_S2W4` row/ideal constants; `STAGE_2_WAVES: tuple[WaveData, ...]`
+  (4 waves: 2-row opener through 3-row finale); `STAGES: tuple[tuple[WaveData, ...], ...]` master
+  table of both stages. Module docstring updated to note 3-row waves.
+- `game_manager.py` — `_stage_index: int = 0` field; `stage_index` property; `on_stage_clear_key(player)`
+  (gates on STAGE_CLEAR phase + hold, calls `_on_stage_complete`); `_on_stage_complete(player)` (increments
+  stage index, resets all subsystems, enters WAVE_RISING); `_on_wave_cleared` now branches on
+  `_stage_index >= len(STAGES) - 1` to choose VICTORY vs STAGE_CLEAR; `_calculate_final_iq()` uses
+  `min(stage_index, len(table)-1)` for both multiplier tables; `_reset_state()` zeroes `_stage_index`;
+  `_do_restart(player)` simplified (no `waves` param, always uses `STAGES[0]`); `_MENU_BLOCKED` +
+  `update()` end-hold timer both extended to cover `STAGE_CLEAR`; import: `STAGES` added.
+- `hud.py` — `MAX_HUD_CACHE_ENTRIES` 8 → 9; added `("stage", f"Stage: {stage_num}")` as 7th stat line
+  (before Wave); `assert len(stats) == 7` → `== 8`.
+- `main.py` — `from wave_data import STAGES`; `start_first_wave(player, STAGES[0])`; STAGE_CLEAR added to
+  frozen set; `_draw_stage_clear_overlay()` (green "STAGE N CLEAR" + score + "Next: Stage N+1" + hold-gated
+  prompt); VICTORY overlay title changed "STAGE CLEAR" → "GAME CLEAR"; WAVE_RISING banner changed
+  "Wave X / Y" → "Stage N — Wave X / Y" (UX advisory to orient player after stage transition);
+  `on_stage_clear_key(player)` in `_drain_events`; STAGE_CLEAR overlay dispatch added.
+
+**Expert panel (all 4 APPROVED after fixes):**
+- Vision Lead: APPROVED (conditional) — VICTORY overlay "STAGE CLEAR" ambiguous with between-stage
+  screen; changed title to "GAME CLEAR".
+- Code Quality: APPROVED — all Power of Ten rules satisfied; assert/Rule-7/Rule-9 correct; no suppressions.
+- UX Tester: APPROVED (conditional) — same VICTORY title fix; advisory: WAVE_RISING banner lacked stage
+  context → added "Stage N — " prefix.
+- Platform Engineer: APPROVED — all 7 boundary checks clean (re-entrancy, reset order, WASM budget,
+  S2W4 3-row validation, STAGES import-time safety, assert/ValueError downgrade, hold threshold).
+
+**Smoke tests:** stage transition flow (Stage 1→STAGE_CLEAR→Stage 2→VICTORY), IQ multiplier for Stage 2,
+restart resets to Stage 1, STAGES/STAGE_2_WAVES structure. Tooling: ruff + mypy --strict clean (12 files).
+
+`docs/STEP20_REVIEW.md` written. **Step 20 APPROVED by user 2026-05-02.**
+
+### Session — 2026-05-02 — Step 21 Phase A (Per-stage tick interval table)
+
+**Changed files (Step 21 — A2 per-stage tick table):**
+- `constants.py` — Replaced `TICK_INTERVAL = 1.2` and `AVALANCHE_TICK_INTERVAL = 0.15` with
+  `STAGE_TICK_INTERVALS = [1.2, 0.9]` and `STAGE_AVALANCHE_TICK_INTERVALS = [0.15, 0.12]`.
+  Kept backward-compat aliases at index 0 for `WaveManager.__init__`. Updated turbo comment to
+  reference the tables instead of fixed Stage-1 values.
+- `wave_manager.py` — `reset_for_new_wave()` removed `self._tick_interval = TICK_INTERVAL`.
+  WaveManager no longer knows about stages; caller always sets interval. Docstring updated.
+- `game_manager.py` — Removed `TICK_INTERVAL` + `AVALANCHE_TICK_INTERVAL` imports; added
+  `STAGE_TICK_INTERVALS` + `STAGE_AVALANCHE_TICK_INTERVALS`. Added two private properties:
+  `_cur_tick_interval` and `_cur_avalanche_tick_interval` (min-clamp to table length).
+  Updated 5 call sites: `_spawn_wave` + `_on_stage_complete` (set interval after reset),
+  `_trigger_avalanche` (stage-aware avalanche speed), `set_turbo(False)` (restore to stage
+  speed, not hardcoded Stage-1), `on_menu_open` (clear turbo to stage speed).
+  Fixed latent bug: `set_turbo(False)` previously snapped back to Stage-1 speed in Stage 2.
+
+**Expert panel (all 4 APPROVED after 3 post-panel fixes):**
+- Vision Lead: stale turbo comment → updated to reference tables.
+- Code Quality: `_on_stage_complete` didn't set interval immediately after `reset_for_new_wave`
+  (docstring contract violation) → added `wave.tick_interval = _cur_tick_interval` call.
+  Stale Step 5A docstring reference → updated.
+- UX Tester: same `_on_stage_complete` finding; confirmed turbo carryover is safe.
+- Platform Engineer: all 7 boundary checks pass; confirmed `set_turbo(False)` bug was fixed.
+
+**Smoke tests:** stage-indexed properties (all indices), turbo toggle (both stages), menu-open
+turbo clear, stage 1→2 transition sets Stage-2 speed, turbo carryover through stage transition.
+Tooling: ruff + mypy --strict clean (12 files, 3 changed).
+
+`docs/STEP21_REVIEW.md` written. **Step 21 APPROVED by user 2026-05-02** (with one user-directed change: added `TICK_SPEED_DECAY = 0.9` formula so Stage 3, 5, 7, … each run 10% faster than the previous stage pair, while even stages hold the same speed as the preceding odd stage).
+
+### Session — 2026-05-02 — Step 22 Phase A (Bundled .ttf font)
+
+**Changed / new files (Step 22 — A3 bundled font):**
+- `assets/freesansbold.ttf` — pygame's own default font (97 KB), copied from
+  `.venv/Lib/site-packages/pygame/freesansbold.ttf`. Identical to what
+  `pygame.font.Font(None, size)` already loaded, so visual appearance is unchanged.
+  Bundled in the WASM APK because `assets/` is not in `pygbag.ini` ignoredirs.
+- `fonts.py` — New module. `load_font(size: int) -> pygame.font.Font` caches
+  Font objects by size (bounded at `MAX_CACHED_FONT_SIZES = 16`). Tries
+  `assets/freesansbold.ttf` relative to `__file__`; falls back to `Font(None, size)`
+  on `FileNotFoundError`/`OSError` so the game runs on unconfigured checkouts.
+  Cache is valid for one `pygame.font.init()` session (comment added per Code Quality
+  panel advisory).
+- `main.py` — Added `from fonts import load_font`; replaced both
+  `pygame.font.Font(None, ...)` calls with `load_font(28)` and `load_font(64)`.
+
+**Expert panel (all 4 APPROVED outright):**
+- Vision Lead: `freesansbold.ttf` byte-for-byte identical to pygame's internal default;
+  no visual regression.
+- Code Quality: Rule 3/5/9/10 all satisfied; session-lifetime comment added to `_cache`
+  per advisory.
+- UX Tester: fallback path confirmed genuine (`FileNotFoundError` → `Font(None, size)`);
+  no stale-cache scenario in current restart path; `load_font(0)` raises immediately.
+- Platform Engineer: `os.path.dirname(__file__)` works correctly in Pygbag virtual FS;
+  `assets/` will be bundled (not in ignoredirs); `pygame.font.Font(path)` uses SDL_RWops
+  (standard POSIX API, works on Pygbag MEMFS); exception coverage correct.
+
+**Smoke tests:** path resolution, cache hits, ValueError on bad sizes, font renders text.
+Tooling: ruff + mypy --strict clean (`fonts.py`, `main.py`).
+
+`docs/STEP22_REVIEW.md` written.
+
+**Post-implementation fixes applied during browser test:**
+- `run_dev.sh` — `fonts.py` was absent from the hardcoded file-copy loop; added.
+  (Root cause of black screen: `ModuleNotFoundError` in WASM killed the async main loop.)
+- `fonts.py` — path changed from `os.path.dirname(__file__) + "assets/..."` to
+  `os.path.join("assets", "freesansbold.ttf")` (CWD-relative; `__file__` is unreliable
+  in Pygbag's virtual filesystem).
+- `fonts.py` — `except` clause extended from `(FileNotFoundError, OSError)` to
+  `(FileNotFoundError, OSError, pygame.error)` (`pygame.font.Font()` raises `pygame.error`
+  from SDL's file loader, not `OSError`).
+
+**Step 22 APPROVED by user 2026-05-02** ("Now it works.")
+
+### Session — 2026-05-02 — Step 21 speed formula revision + Step 23 Phase A (Movement perpendicular priority)
+
+**Step 21 speed formula revision (user-directed):**
+- Removed hand-tuned `STAGE_TICK_INTERVALS[1] = 0.9` (Stage 2 at 25% faster).
+- `STAGE_TICK_INTERVALS` reduced to `[1.2]` (single base value).
+- `_cur_tick_interval` simplified: `STAGE_TICK_INTERVALS[0] * (TICK_SPEED_DECAY ** (i // 2))`.
+  - `i // 2 == 0` for both Stage 1 (i=0) and Stage 2 (i=1), so they share the 1.2 s base.
+  - Speed steps only at Stages 3, 5, 7, 9 (where `i // 2` increments), each 10% faster.
+
+**Changed files (Step 23 — A8 Movement perpendicular priority):**
+- `player.py` — Added Z-axis priority guard in `_first_held_direction()` after the
+  opposing-pair cancellation pass:
+  ```python
+  z_dirs = held_dirs & {Direction.FORWARD, Direction.BACKWARD}
+  x_dirs = held_dirs & {Direction.LEFT, Direction.RIGHT}
+  if z_dirs and x_dirs:
+      held_dirs = z_dirs
+  ```
+  When FORWARD/BACKWARD and LEFT/RIGHT survive cancellation simultaneously, the Z-axis
+  direction wins. Matches original I.Q. behaviour (D-pad made true diagonals impossible).
+  Removed stale TODO comment about deferring perpendicular priority. Updated docstrings.
+
+**Expert panel (all 4 APPROVED outright):**
+- Vision Lead: Z-priority faithful to D-pad hardware; correct resolution of a keyboard-specific
+  gap that never existed in the original.
+- Code Quality: set-intersection exhaustive and correct; guard fires only on genuine
+  perpendicular case; Rule 4/5/10 all satisfied.
+- UX Tester: Z-winning is the survivable direction in all panic scenarios; old X-winning
+  was an ordering artifact with no design justification.
+- Platform Engineer: pure Python set arithmetic on ≤4 elements; zero WASM concern;
+  fully isolated.
+
+Tooling: ruff + mypy --strict clean (`player.py`).
+
+`docs/STEP23_REVIEW.md` written.
+
+**Step 23 APPROVED by user 2026-05-02.**
+
+### Session — 2026-05-03 — Step 24 Phase A (Camera rework, A7)
+
+**Changed files (Step 24 — A7 camera rework):**
+- `constants.py` — `CAMERA_POS` Y raised from 13.0 → 15.0; elevation 25° → 28°.
+  Camera comment block rewritten: old TODO(camera) removed (rework now complete),
+  new geometry section documents direction vector (0, −15, 28), elevation formula,
+  and numerically verified NDC clip bounds for all four grid corners.
+  All other camera constants unchanged (Z offset −28, FOV 50°, target unchanged).
+
+**Geometry verified numerically:**
+- front-row floor (z=−0.5): y_ndc ≈ −0.61 (safe above −1.0 clip)
+- back-row floor (z=24.5): y_ndc ≈ +0.30 (safe below +1.0 clip)
+- all corner vertices: x_ndc within ±0.25
+
+**Expert panel (all 4 APPROVED outright):**
+- Vision Lead: 28° preserves three-face cube read (top/front/side); moves toward
+  original I.Q. range (~25–30°); checkerboard and DANGER_TOP_COLOR both improved.
+- Code Quality: geometry numbers accurate; TODO removal appropriate; no other
+  constants reference old Y=13; camera block needs no assertions.
+- UX Tester: front-row spacing ~22 px/row (+4–9% row separability); player shadow
+  unaffected; no clipping anywhere in the grid.
+- Platform Engineer: VP matrix computed at `Renderer.__init__()` from module
+  constants — zero stale-cache risk; WASM-inert pure-constant change.
+
+Tooling: ruff + mypy --strict clean (constants.py).
+
+`docs/STEP24_REVIEW.md` written. Awaiting user browser verification.
+
+**Step 24 APPROVED by user 2026-05-03.**
+
+### Session — 2026-05-06 — Step 25 Phase A (Audio system, A1)
+
+**New files (Step 25 — A1 audio system):**
+- `audio.py` — `AudioSystem` class with 8 procedural PCM sounds synthesised at startup
+  using Python's `array` module + `pygame.mixer.Sound(buffer=...)`. No audio files
+  required; all sounds generated from scratch.
+  Sounds: `tick_normal` (220 Hz sine, 60 ms), `tick_avalanche` (300 Hz sine, 50 ms,
+  80% amp), `capture` (440→660 Hz ascending two-tone bleep, 80+30+80 ms),
+  `forbidden_buzz` (150 Hz square wave, 250 ms, 65% amp), `row_delete` (55+80+120 Hz
+  sine mix, 300 ms), `wave_clear` (C5→E5→G5 arpeggio, 120 ms each + 40 ms gaps),
+  `detonation` (600→150 Hz sweep, 100 ms), `game_over` (400→100 Hz sweep + fade, 700 ms).
+  `get_init()` guard degrades silently if mixer unavailable.
+
+**Changed files (Step 25):**
+- `constants.py` — Added `SOUND_ENABLED: bool = True`.
+- `game_manager.py` — Added `audio: AudioSystem | None = None` constructor param;
+  11 call-sites wired: capture/forbidden/blast sounds in `_dispatch_capture` and
+  `_execute_blast`; row_delete in `_count_wave_misses` and `_apply_avalanche_penalties`;
+  wave_clear in `_on_wave_cleared` and `_on_stage_complete`; game_over in `_check_game_over`.
+- `main.py` — `pygame.mixer.pre_init(frequency=22050, size=-16, channels=1, buffer=512)` before `pygame.init()`;
+  creates `AudioSystem`; tick sounds (`tick_normal` / `tick_avalanche`) fired in main loop
+  on wave tick event, gated by phase.
+- `run_dev.sh` — Added `audio.py` to build file-copy list.
+
+**Expert panel (all 4 APPROVED after fixes):**
+- Vision Lead: APPROVED (after fix) — blast Forbidden must emit both buzz + rumble
+  (dual-sound fix applied to `_execute_blast` ROW_DELETE path).
+- UX Tester: APPROVED (after fixes) — detonation sound added for blast captures
+  (SCORE + DETONATE_3X3 paths); forbidden buzz amplitude raised 40% → 65%;
+  stage-continue fanfare added to `_on_stage_complete`.
+- Code Quality: APPROVED — all Power of Ten rules pass; zero ruff/mypy issues.
+- Platform Engineer: APPROVED — pre_init sequence correct; `array` + `Sound(buffer=)`
+  WASM-compatible path confirmed; AudioContext gesture-policy handled by `get_init()`
+  guard; memory nominal (~170 KB PCM total).
+
+`docs/STEP25_REVIEW.md` written.
+
+**Step 25 APPROVED by user 2026-05-06. Post-v1 enhancement plan complete.**

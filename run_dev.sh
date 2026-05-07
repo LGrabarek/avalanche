@@ -11,7 +11,7 @@ mkdir -p "$BUILD_DIR"
 
 # Copy only game Python files
 for f in main.py constants.py renderer.py cube_data.py grid_manager.py wave_manager.py \
-         wave_data.py player.py game_manager.py hud.py effects.py; do
+         wave_data.py player.py game_manager.py hud.py effects.py fonts.py audio.py; do
     [ -f "$PROJ_DIR/$f" ] && cp "$PROJ_DIR/$f" "$BUILD_DIR/"
 done
 

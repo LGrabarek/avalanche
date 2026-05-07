@@ -8,13 +8,18 @@ import asyncio
 
 import pygame
 
+from audio import AudioSystem
 from constants import (
+    DANGER_TOP_COLOR,
     KEY_DETONATE,
     KEY_MARK,
     KEY_TRIGGER,
     KEY_TRIGGER_ALT,
+    KEY_TURBO,
+    PLAYER_HALF_EXTENT,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SOUND_ENABLED,
     GamePhase,
 )
 from cube_data import (
@@ -28,18 +33,26 @@ from cube_data import (
     get_tile_face,
 )
 from effects import FlashEffects
+from fonts import load_font
 from game_manager import GameManager
 from grid_manager import GridManager
 from hud import Hud
 from player import Player
 from renderer import ProjectedFace, Renderer
-from wave_data import STAGE_1_WAVES
+from wave_data import STAGES
 from wave_manager import MAX_ACTIVE_CUBES, WaveManager
 
 # --- Tuning -------------------------------------------------------------------
 DT_CLAMP: float = 0.1             # Cap dt so tab-switch spirals don't explode state
-FPS_SAMPLES_MAX: int = 60         # Rolling-dt window size
 BG_COLOR: tuple[int, int, int] = (0, 0, 0)
+# B3d: Dark floor ellipse drawn beneath the player between the grid and player
+# render passes.  Chosen darker than the tile palette (~90 brightness) so it
+# reads as a shadow without being too heavy.
+SHADOW_COLOR: tuple[int, int, int] = (30, 30, 40)
+
+# --- Pause menu ---------------------------------------------------------------
+MENU_ITEMS: tuple[str, ...] = ("RESUME", "RESTART")
+MENU_ITEM_COUNT: int = len(MENU_ITEMS)  # kept in sync with MENU_ITEMS
 
 
 # --- Frame construction -------------------------------------------------------
@@ -75,27 +88,70 @@ def _build_player_faces(
     return faces
 
 
-def _build_cube_faces(renderer: Renderer, wave: WaveManager) -> list[ProjectedFace]:
+def _build_cube_faces(
+    renderer: Renderer,
+    wave: WaveManager,
+    danger: frozenset[tuple[int, int]],
+) -> list[ProjectedFace]:
     """Project the six faces of every live cube in the wave.
 
     Each cube queries the wave's shared `tumble_progress`, applies the pivot
     rotation via `get_cube_vertices`, then emits 6 color-tagged faces through
     the standard projection + back-face-cull pipeline.
+
+    B3e: cubes in `danger` (one tick from the front edge) have their top face
+    (index 0 in _CUBE_FACES) rendered in DANGER_TOP_COLOR as a visual telegraph.
     """
     faces: list[ProjectedFace] = []
     max_faces = MAX_ACTIVE_CUBES * 6
     for gx, gz, progress, cube_type in wave.iter_cubes():
         world_verts = get_cube_vertices(gx, gz, progress)
-        for face_verts, fill_color, edge_color, edge_width in get_cube_faces(
-            world_verts, cube_type,
+        is_danger = (gx, gz) in danger
+        for face_idx, (face_verts, fill_color, edge_color, edge_width) in enumerate(
+            get_cube_faces(world_verts, cube_type)
         ):
-            projected = renderer.project_face(face_verts, fill_color, edge_color, edge_width)
+            color = DANGER_TOP_COLOR if (is_danger and face_idx == 0) else fill_color
+            projected = renderer.project_face(face_verts, color, edge_color, edge_width)
             if projected is not None:
                 faces.append(projected)
     assert len(faces) <= max_faces, (
         f"cube face count {len(faces)} exceeded bound {max_faces}"
     )
     return faces
+
+
+def _draw_player_shadow(
+    scene_surf: pygame.Surface,
+    renderer: Renderer,
+    player: Player,
+) -> None:
+    """Draw a dark floor ellipse beneath the player as a ground-contact shadow.
+
+    B3d: Projects the four corners of the player footprint at floor level (y=0)
+    and uses their screen-space bounding box to size and place the ellipse.
+    Called after the grid/cube/marker render pass so the shadow sits on top of
+    the tiles, and before the player render pass so the player cube is drawn
+    on top of its own shadow.
+    """
+    px, pz = player.position()
+    fpx, fpz = float(px), float(pz)
+    he = PLAYER_HALF_EXTENT
+    corners = [
+        renderer.project_vertex(fpx - he, 0.0, fpz - he),
+        renderer.project_vertex(fpx + he, 0.0, fpz - he),
+        renderer.project_vertex(fpx + he, 0.0, fpz + he),
+        renderer.project_vertex(fpx - he, 0.0, fpz + he),
+    ]
+    if any(c is None for c in corners):
+        return
+    valid: list[tuple[float, float, float]] = [c for c in corners if c is not None]
+    assert len(valid) == 4, "expected 4 valid shadow corner projections"
+    sx_vals = [c[0] for c in valid]
+    sy_vals = [c[1] for c in valid]
+    ew = max(4, int(max(sx_vals)) - int(min(sx_vals)))
+    eh = max(2, int(max(sy_vals)) - int(min(sy_vals)))
+    rect = pygame.Rect(int(min(sx_vals)), int(min(sy_vals)), ew, eh)
+    _ = pygame.draw.ellipse(scene_surf, SHADOW_COLOR, rect)  # no dirty-rect tracking
 
 
 def _build_marker_faces(renderer: Renderer, grid: GridManager) -> list[ProjectedFace]:
@@ -130,8 +186,9 @@ def _drain_events(
     player: Player,
     game: GameManager,
     paused: bool,
-) -> tuple[bool, bool]:
-    """Process one frame of pygame events. Returns (running, paused).
+    menu_selected: int,
+) -> tuple[bool, bool, int]:
+    """Process one frame of pygame events. Returns (running, paused, menu_selected).
 
     Step 4A wires two discrete action keys:
       * `KEY_MARK` (SPACE) — place a mark at the player's current tile.
@@ -141,6 +198,8 @@ def _drain_events(
     must fire exactly once per press; holding SPACE should not spam marks.
     Movement stays on `pygame.key.get_pressed()` in the held-keys path.
     Step 6A adds ACTIVEEVENT to pause the game on focus loss.
+    Step 14 adds Esc pause menu: opens/closes MENU phase, routes ↑↓ and
+    confirm keys, and tracks the highlighted cursor via menu_selected.
     """
     events = pygame.event.get()
     # Rule-5 check: pygame should never hand us a pathologically-long queue,
@@ -151,21 +210,82 @@ def _drain_events(
     )
     for event in events:
         if event.type == pygame.QUIT:
-            return False, paused
+            return False, paused, menu_selected
         if event.type == pygame.ACTIVEEVENT:
             paused = not bool(event.gain)  # gain=1: focused; gain=0: focus lost
+            if not event.gain:
+                game.set_turbo(False)  # prevent stuck-turbo if KEYUP is lost on blur
         elif event.type == pygame.KEYDOWN and not paused:
             if game.phase == GamePhase.TITLE:
                 game.on_title_advance()  # any key starts the game from the title screen
             elif game.phase in (GamePhase.GAME_OVER, GamePhase.VICTORY):
                 game.on_restart_key(player)  # any key restarts from TITLE
+            elif game.phase == GamePhase.STAGE_CLEAR:
+                game.on_stage_clear_key(player)  # any key advances to next stage
+            elif game.phase == GamePhase.MENU:
+                if event.key == pygame.K_ESCAPE:
+                    game.on_menu_close()          # Esc = Resume (direct close)
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    menu_selected = (menu_selected - 1) % MENU_ITEM_COUNT
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    menu_selected = (menu_selected + 1) % MENU_ITEM_COUNT
+                elif event.key in (KEY_TRIGGER, KEY_TRIGGER_ALT):
+                    game.on_menu_select(menu_selected, player)
+                    menu_selected = 0  # reset cursor after any selection
+            elif event.key == pygame.K_ESCAPE:
+                game.on_menu_open()   # open menu; cursor resets in main()
+                menu_selected = 0
             elif event.key == KEY_MARK:
                 _ = game.try_mark(player.grid_x, player.grid_z)  # unused: result is advisory
             elif event.key in (KEY_TRIGGER, KEY_TRIGGER_ALT):
                 _ = game.on_trigger(player)  # unused: outcome is for Step 10 audio cues
             elif event.key == KEY_DETONATE:
                 game.on_detonate(player)  # void: score delta tracked inside game
-    return True, paused
+            elif event.key == KEY_TURBO:
+                game.set_turbo(True)  # hold-to-turbo: activate on keydown
+        elif event.type == pygame.KEYUP and event.key == KEY_TURBO:
+            game.set_turbo(False)  # deactivate turbo on key release
+    return True, paused, menu_selected
+
+
+def _draw_menu_overlay(
+    screen: pygame.Surface,
+    big_font: pygame.font.Font,
+    small_font: pygame.font.Font,
+    selected: int,
+) -> None:
+    """Full-screen pause menu with keyboard-navigable item list.
+
+    Draws a semi-transparent veil, a PAUSED title, two items (RESUME /
+    RESTART), and a controls hint.  The selected item is highlighted in gold
+    with a '>' prefix; the other is dimmed.
+    """
+    assert 0 <= selected < MENU_ITEM_COUNT, (
+        f"menu cursor {selected} out of range [0, {MENU_ITEM_COUNT})"
+    )
+    veil = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    veil.fill((0, 0, 0, 200))
+    _ = screen.blit(veil, (0, 0))  # unused: no dirty-rect tracking
+
+    big_line_h = big_font.size("A")[1]
+    title_y = SCREEN_HEIGHT // 4
+    title_surf = big_font.render("PAUSED", True, (220, 220, 220))
+    title_x = (SCREEN_WIDTH - title_surf.get_width()) // 2
+    _ = screen.blit(title_surf, (title_x, title_y))
+
+    item_y = title_y + big_line_h * 2
+    for i, label in enumerate(MENU_ITEMS):
+        color = (255, 240, 100) if i == selected else (140, 140, 140)
+        prefix = "> " if i == selected else "  "
+        surf = big_font.render(prefix + label, True, color)
+        cx = (SCREEN_WIDTH - surf.get_width()) // 2
+        _ = screen.blit(surf, (cx, item_y + i * (big_line_h + 8)))
+
+    hint_text = "W/S or Up/Down  Navigate     X / Enter  Confirm     Esc  Resume"
+    hint_surf = small_font.render(hint_text, True, (90, 90, 110))
+    hint_x = (SCREEN_WIDTH - hint_surf.get_width()) // 2
+    hint_y = SCREEN_HEIGHT * 3 // 4
+    _ = screen.blit(hint_surf, (hint_x, hint_y))
 
 
 def _draw_pause_overlay(screen: pygame.Surface, font: pygame.font.Font) -> None:
@@ -214,7 +334,8 @@ def _draw_wave_rising_overlay(
         perf_x = (SCREEN_WIDTH - perf.get_width()) // 2
         _ = screen.blit(perf, (perf_x, text_y))
         text_y += line_h
-    wave_label = f"Wave {game.wave_index + 1} / {game.wave_count}"
+    stage_num = game.stage_index + 1
+    wave_label = f"Stage {stage_num}  —  Wave {game.wave_index + 1} / {game.wave_count}"
     wave_surf = big_font.render(wave_label, True, (220, 220, 220))
     wave_x = (SCREEN_WIDTH - wave_surf.get_width()) // 2
     _ = screen.blit(wave_surf, (wave_x, text_y))
@@ -228,18 +349,62 @@ def _draw_game_over_overlay(
     screen: pygame.Surface,
     font: pygame.font.Font,
     game: GameManager,
+    hold_ready: bool,
 ) -> None:
-    """Centered GAME OVER block with final score and restart prompt."""
+    """Centered GAME OVER block with final score and restart prompt.
+
+    The prompt is shown dimmed for the first END_SCREEN_HOLD seconds so an
+    accidental keypress at the moment of death cannot skip the screen.  Once
+    the hold expires the prompt brightens and keypresses are accepted.
+    """
     lines: tuple[str, ...] = (
         "GAME OVER",
         f"Score: {game.score}",
         "Press any key to restart",
     )
     assert len(lines) == 3, "game_over overlay line count changed — update assertion"
+    prompt_color: tuple[int, int, int] = (140, 140, 140) if hold_ready else (50, 50, 55)
     colors: tuple[tuple[int, int, int], ...] = (
         (220, 60, 60),
         (220, 220, 220),
-        (140, 140, 140),
+        prompt_color,
+    )
+    line_h = font.size("A")[1]
+    total_h = len(lines) * line_h
+    start_y = (SCREEN_HEIGHT - total_h) // 2
+    for i, text in enumerate(lines):
+        surface = font.render(text, True, colors[i])
+        cx = (SCREEN_WIDTH - surface.get_width()) // 2
+        _ = screen.blit(surface, (cx, start_y + i * line_h))  # no dirty-rect
+
+
+def _draw_stage_clear_overlay(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    game: GameManager,
+    hold_ready: bool,
+) -> None:
+    """Between-stage screen: stage number, running score, and continue prompt.
+
+    Shown after the last wave of a non-final stage completes. The prompt is
+    dimmed for END_SCREEN_HOLD seconds so the player has time to read their
+    score before input is accepted.
+    """
+    cleared_stage = game.stage_index + 1    # 1-based stage just finished
+    next_stage = game.stage_index + 2       # 1-based stage about to start
+    lines: tuple[str, ...] = (
+        f"STAGE {cleared_stage} CLEAR",
+        f"Score: {game.score}",
+        f"Next: Stage {next_stage}",
+        "Press any key to continue",
+    )
+    assert len(lines) == 4, "stage_clear overlay line count changed — update assertion"
+    prompt_color: tuple[int, int, int] = (140, 140, 140) if hold_ready else (50, 50, 55)
+    colors: tuple[tuple[int, int, int], ...] = (
+        (100, 220, 100),    # green — positive stage-complete signal
+        (220, 220, 220),
+        (180, 180, 220),
+        prompt_color,
     )
     line_h = font.size("A")[1]
     total_h = len(lines) * line_h
@@ -254,20 +419,27 @@ def _draw_victory_overlay(
     screen: pygame.Surface,
     font: pygame.font.Font,
     game: GameManager,
+    hold_ready: bool,
 ) -> None:
-    """Centered STAGE CLEAR label with final score and I.Q. readout."""
+    """Centered STAGE CLEAR label with final score and I.Q. readout.
+
+    The prompt is shown dimmed for the first END_SCREEN_HOLD seconds so the
+    player has time to read the score before input is accepted.  Once the hold
+    expires the prompt brightens and keypresses are accepted.
+    """
     lines: tuple[str, ...] = (
-        "STAGE CLEAR",
+        "GAME CLEAR",
         f"Score: {game.score}",
         f"I.Q.: {game.iq_score}",
         "Press any key to restart",
     )
     assert len(lines) == 4, "victory overlay line count changed — update assertion"
+    prompt_color: tuple[int, int, int] = (140, 140, 140) if hold_ready else (50, 50, 55)
     colors: tuple[tuple[int, int, int], ...] = (
         (255, 240, 100),
         (220, 220, 220),
         (180, 220, 255),
-        (140, 140, 140),
+        prompt_color,
     )
     line_h = font.size("A")[1]
     total_h = len(lines) * line_h
@@ -278,48 +450,35 @@ def _draw_victory_overlay(
         _ = screen.blit(surface, (cx, start_y + i * line_h))  # no dirty-rect
 
 
-def _update_fps(samples: list[float], dt: float) -> float:
-    """Append dt to a bounded rolling window and return the current FPS.
-
-    The window is hard-capped at FPS_SAMPLES_MAX. Rule 3 requires the bound
-    check to GUARD the append — we trim first, then append, then assert the
-    invariant. This ordering makes the precondition visible at the append
-    site rather than leaving it to a trailing cleanup.
-    """
-    if dt > 1e-6:
-        if len(samples) >= FPS_SAMPLES_MAX:
-            _ = samples.pop(0)  # unused: side-effect is trimming the oldest sample
-        samples.append(dt)
-        assert len(samples) <= FPS_SAMPLES_MAX, "fps sample window exceeded cap"
-    total = sum(samples)
-    if total <= 0.0:
-        return 0.0
-    return len(samples) / total
-
-
 # --- Entry point --------------------------------------------------------------
 
 async def main() -> None:
+    # Step 25 (A1): pre-init mixer before pygame.init() so the audio subsystem
+    # opens with the correct format. 22050 Hz mono 16-bit matches AudioSystem's
+    # SAMPLE_RATE constant. buffer=512 keeps latency low (<12 ms at 22050 Hz).
+    pygame.mixer.pre_init(frequency=22050, size=-16, channels=1, buffer=512)
     pygame.init()
+    audio: AudioSystem | None = AudioSystem() if SOUND_ENABLED else None
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Avalanche")
     clock = pygame.time.Clock()
-    # Pygame's bundled freesansbold.ttf works under WASM (no SysFont).
-    font = pygame.font.Font(None, 28)
-    overlay_font = pygame.font.Font(None, 64)  # large text for title / wave banners
+    # Step 22 (A3): load_font() uses bundled assets/freesansbold.ttf with an
+    # automatic fallback to Font(None, …) if the asset is absent.
+    font = load_font(28)
+    overlay_font = load_font(64)  # large text for title / wave banners
     renderer = Renderer()
     grid = GridManager()
     player = Player(grid)
     wave = WaveManager()
     effects = FlashEffects()
-    game = GameManager(grid, wave, effects)
-    game.start_first_wave(player, STAGE_1_WAVES)
+    game = GameManager(grid, wave, effects, audio=audio)
+    game.start_first_wave(player, STAGES[0])
     hud = Hud(player, grid, wave, game)
 
     scene_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-    fps_samples: list[float] = []
     running = True
     paused: bool = False
+    menu_selected: int = 0  # highlighted item index in the pause menu
 
     # Rule 2 — top-level event loop exception. This is the ONE bounded-by-user
     # loop in the application; every nested loop we write must have an
@@ -329,7 +488,7 @@ async def main() -> None:
         if dt > DT_CLAMP:
             dt = DT_CLAMP
 
-        running, paused = _drain_events(player, game, paused)
+        running, paused, menu_selected = _drain_events(player, game, paused, menu_selected)
 
         # update() handles WAVE_RISING timer and must run even while frozen
         # so the between-wave pause counts down correctly.
@@ -339,6 +498,7 @@ async def main() -> None:
         frozen = game.phase in (
             GamePhase.TITLE, GamePhase.WAVE_RISING,
             GamePhase.GAME_OVER, GamePhase.VICTORY,
+            GamePhase.STAGE_CLEAR, GamePhase.MENU,
         )
         if not paused and not frozen:
             held_keys = pygame.key.get_pressed()
@@ -346,36 +506,52 @@ async def main() -> None:
             player.update(dt, held_keys, blocked)
             tick_fired = wave.update(dt, grid.front_edge_z)
             if tick_fired:
+                # Sample phase BEFORE on_tick: on_tick may transition the
+                # phase (e.g. WAVE_ACTIVE → WAVE_RISING on last cube), so
+                # we need the phase that was active when the tick fired.
+                phase_at_tick = game.phase
                 game.on_tick(player, wave)
+                if audio is not None and phase_at_tick in (
+                    GamePhase.WAVE_ACTIVE, GamePhase.AVALANCHE
+                ):
+                    audio.play_tick(phase_at_tick == GamePhase.AVALANCHE)
             game.check_mid_tumble_crush(player, wave)
         effects.update(dt)
 
-        fps_display = _update_fps(fps_samples, dt)
-
         player_visual = PlayerVisual.CRUSHED if player.is_crushed else PlayerVisual.NORMAL
+        danger = wave.danger_cubes(grid.front_edge_z)
+        # B3d/B3e: split face list so the player shadow can be drawn between
+        # the grid+cube layer and the player layer, preserving correct depth
+        # ordering within each layer while placing the shadow on top of tiles.
         face_list: list[ProjectedFace] = []
         face_list.extend(_build_grid_faces(renderer, grid))
-        face_list.extend(_build_cube_faces(renderer, wave))
-        face_list.extend(_build_player_faces(renderer, player, player_visual))
+        face_list.extend(_build_cube_faces(renderer, wave, danger))
         face_list.extend(_build_marker_faces(renderer, grid))
+        player_faces = _build_player_faces(renderer, player, player_visual)
 
         scene_surf.fill(BG_COLOR)
-        renderer.render_frame(scene_surf, face_list)
+        renderer.render_frame(scene_surf, face_list)   # grid + cubes + markers
+        _draw_player_shadow(scene_surf, renderer, player)  # shadow on tiles
+        renderer.render_frame(scene_surf, player_faces)    # player atop shadow
         effects.draw(scene_surf, renderer)
         shake_x, shake_y = effects.shake_offset()
         screen.fill(BG_COLOR)
         _ = screen.blit(scene_surf, (shake_x, shake_y))  # unused: dest rect
-        hud.draw(screen, font, fps_display, len(face_list))
+        hud.draw(screen, font)
         if paused:
             _draw_pause_overlay(screen, font)
+        elif game.phase == GamePhase.MENU:
+            _draw_menu_overlay(screen, overlay_font, font, menu_selected)
         elif game.phase == GamePhase.TITLE:
             _draw_title_overlay(screen, overlay_font, font)
         elif game.phase == GamePhase.WAVE_RISING:
             _draw_wave_rising_overlay(screen, overlay_font, font, game)
         elif game.phase == GamePhase.GAME_OVER:
-            _draw_game_over_overlay(screen, font, game)
+            _draw_game_over_overlay(screen, font, game, game.end_hold_ready)
+        elif game.phase == GamePhase.STAGE_CLEAR:
+            _draw_stage_clear_overlay(screen, font, game, game.end_hold_ready)
         elif game.phase == GamePhase.VICTORY:
-            _draw_victory_overlay(screen, font, game)
+            _draw_victory_overlay(screen, font, game, game.end_hold_ready)
 
         pygame.display.flip()
         await asyncio.sleep(0)  # CRITICAL: yield to browser rAF

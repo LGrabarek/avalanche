@@ -103,9 +103,10 @@ class Player:
         `held_keys` is the raw `pygame.key.get_pressed()` sequence. Opposite-
         axis holds cancel (LEFT+RIGHT or FORWARD+BACKWARD → no move), so a
         player "leaning on the keyboard" doesn't snap a silent direction.
-        Perpendicular conflicts collapse to the first-in-iteration match.
         `wave_blocked` is the set of tiles currently occupied by wave cubes;
         the player cannot enter those tiles (same blocking as void tiles).
+        When a Z-axis key (FORWARD/BACKWARD) and an X-axis key (LEFT/RIGHT) are
+        held simultaneously, the Z-axis wins (Step 23 perpendicular priority).
         """
         if dt < 0.0:
             raise ValueError(f"dt must be non-negative, got {dt}")
@@ -165,14 +166,11 @@ def _first_held_direction(held_keys: Sequence[bool]) -> Direction | None:
         → None). Silently picking one of two opposing held keys is a classic
         frustration source in tile puzzlers — especially here, where a wrong
         move can get you crushed.
-      * Perpendicular conflicts collapse to the first match in
-        `MOVEMENT_KEYS` iteration order (LEFT, RIGHT, FORWARD, BACKWARD).
-
-    TODO(tuning): perpendicular priority is deferred for later revisit (user
-    feedback after Step 2). Candidate replacement is last-pressed tracking via
-    a KEYDOWN-driven deque so pressing UP while already holding LEFT switches
-    immediately to UP. Revisit once cubes land in Step 3+ and real crush
-    pressure reveals whether the static order feels wrong in play.
+      * Perpendicular conflicts (one Z-axis key + one X-axis key held together)
+        resolve in favour of the Z-axis (FORWARD / BACKWARD). This matches the
+        original I.Q. behaviour: depth movement (towards or away from the
+        advancing wave) is more critical than lateral repositioning, so the
+        game prefers the direction that keeps the player out of harm's way.
 
     In pygame parlance "pressed" is edge-triggered (`KEYDOWN`); this function
     inspects held state, hence the "held" naming. `held_keys[key]` is forwarded
@@ -201,6 +199,14 @@ def _first_held_direction(held_keys: Sequence[bool]) -> Direction | None:
             held_dirs.discard(opposite)
     if not held_dirs:
         return None
+    # Z-axis priority (Step 23): when one FORWARD/BACKWARD and one LEFT/RIGHT
+    # key survive cancellation, keep only the Z-axis direction. This matches
+    # the original I.Q. control feel — depth movement takes precedence because
+    # the player is more likely to be dodging an incoming wave than sidestepping.
+    z_dirs = held_dirs & {Direction.FORWARD, Direction.BACKWARD}
+    x_dirs = held_dirs & {Direction.LEFT, Direction.RIGHT}
+    if z_dirs and x_dirs:
+        held_dirs = z_dirs
     # Return the first surviving direction in the canonical iteration order.
     for direction in MOVEMENT_KEYS:
         if direction in held_dirs:
