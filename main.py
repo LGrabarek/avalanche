@@ -10,6 +10,10 @@ import pygame
 
 from audio import AudioSystem
 from constants import (
+    CAMERA_FOLLOW_FOV,
+    CAMERA_FOLLOW_OFFSET,
+    CAMERA_POS,
+    CAMERA_TARGET,
     DANGER_TOP_COLOR,
     KEY_DETONATE,
     KEY_MARK,
@@ -49,6 +53,28 @@ BG_COLOR: tuple[int, int, int] = (0, 0, 0)
 # render passes.  Chosen darker than the tile palette (~90 brightness) so it
 # reads as a shadow without being too heavy.
 SHADOW_COLOR: tuple[int, int, int] = (30, 30, 40)
+
+# --- Camera -------------------------------------------------------------------
+# Phases during which the camera follows the player cube. All other phases
+# (TITLE, GAME_OVER, VICTORY) use the fixed overview camera (CAMERA_POS /
+# CAMERA_TARGET) so the full grid is visible on non-gameplay screens.
+_FOLLOW_CAMERA_PHASES: frozenset[GamePhase] = frozenset({
+    GamePhase.WAVE_ACTIVE,
+    GamePhase.AVALANCHE,
+    GamePhase.WAVE_RISING,
+    GamePhase.WAVE_CLEARING,
+    GamePhase.PERFECT_CHECK,
+    # STAGE_CLEAR: follow camera holds the player's end-of-stage position.
+    # The overlay veil covers the 3D scene anyway; switching to overview
+    # would cause a jarring zoom-out mid-celebration.
+    GamePhase.STAGE_CLEAR,
+    # MENU: camera holds still at the player's paused position while the
+    # pause overlay is shown. Switching to overview on pause is disorienting.
+    GamePhase.MENU,
+    # NOTE: GamePhase.ROW_COLLAPSING exists in the enum but is never
+    # transitioned to in game_manager.py (reserved for a future animation
+    # pass). Add it here when that phase is implemented.
+})
 
 # --- Pause menu ---------------------------------------------------------------
 MENU_ITEMS: tuple[str, ...] = ("RESUME", "RESTART")
@@ -517,6 +543,20 @@ async def main() -> None:
                     audio.play_tick(phase_at_tick == GamePhase.AVALANCHE)
             game.check_mid_tumble_crush(player, wave)
         effects.update(dt)
+
+        # --- Camera update ----------------------------------------------------
+        # Rebuild the VP matrix every frame so the view tracks the player
+        # during gameplay. Non-gameplay screens revert to the overview camera.
+        if game.phase in _FOLLOW_CAMERA_PHASES:
+            wx, wy, wz = player.world_pos
+            ox, oy, oz = CAMERA_FOLLOW_OFFSET
+            renderer.rebuild_vp(
+                (wx + ox, wy + oy, wz + oz),
+                (wx, wy, wz),
+                CAMERA_FOLLOW_FOV,
+            )
+        else:
+            renderer.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
 
         player_visual = PlayerVisual.CRUSHED if player.is_crushed else PlayerVisual.NORMAL
         danger = wave.danger_cubes(grid.front_edge_z)

@@ -55,6 +55,21 @@ class Player:
     def is_crushed(self) -> bool:
         return self._crushed
 
+    @property
+    def world_pos(self) -> tuple[float, float, float]:
+        """World-space position at the centre of the player's current tile.
+
+        The +0.5 XZ offset centres the camera on the tile interior rather
+        than the tile origin.  y=0.0 (floor level) is intentional: aiming
+        the camera at the floor keeps the player cube in the upper half of
+        the viewport, leaving more vertical screen real estate showing the
+        approaching wave below.  Aiming at y=0.5 (cube midpoint) would
+        vertically centre the player but compress the foreground where
+        tactical decisions happen.  Used by main.py to position the
+        follow camera each frame.
+        """
+        return (self._grid_x + 0.5, 0.0, self._grid_z + 0.5)
+
     def position(self) -> tuple[int, int]:
         """Return the current grid position as `(x, z)`."""
         return (self._grid_x, self._grid_z)

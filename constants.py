@@ -97,6 +97,33 @@ CAMERA_FOV: float = 50.0     # Widened from 45° in Step 6B to keep full grid in
 NEAR_PLANE: float = 0.1
 FAR_PLANE: float = 100.0
 
+# Step 27 — player-following camera used during all gameplay phases.
+#
+# CAMERA_FOLLOW_OFFSET is the vector from the camera target (player world pos)
+# to the camera eye, in world space.  The target is always the player's tile
+# centre at floor level (y=0); the eye is directly above-and-behind.
+#
+# Elevation geometry (follow camera):
+#   direction = target – pos = (0, –10, 18)
+#   elevation = atan2(10, 18) ≈ 29°  — near-identical to the overview (~28°)
+#   The reduced distance (~20 u vs ~33 u) makes individual cubes appear
+#   roughly 1.6× larger in screen pixels.
+#
+# Front-edge visibility note:
+#   With offset_z = –18, the camera sits at z = player_z – 18.  At spawn
+#   (player_z = 21) the camera is at z = 3, so tiles z = 0–2 are behind the
+#   near plane and not rendered.  This is intentional: the front edge (z = 0)
+#   has no cubes on it at spawn — it is only relevant once the player retreats.
+#   When the player is at z = 10 the camera is at z = –8, making z = 0 fully
+#   visible (8 u in front of camera).  Reducing the |z| offset (e.g. –14)
+#   would move the camera *closer* to the player (z = 7), making z = 0 even
+#   *more* occluded — the opposite of the intended effect.
+#
+# CAMERA_FOLLOW_FOV: narrower than the 50° overview to reduce peripheral
+# distortion at close range and give a more cinematic, intimate feel.
+CAMERA_FOLLOW_OFFSET: tuple[float, float, float] = (0.0, 10.0, -18.0)
+CAMERA_FOLLOW_FOV: float = 42.0
+
 
 # --- Face shading -------------------------------------------------------------
 # Per-face brightness multipliers applied in cube_data.get_cube_faces().
