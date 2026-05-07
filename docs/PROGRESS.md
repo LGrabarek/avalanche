@@ -1116,3 +1116,46 @@ Tooling: ruff + mypy --strict clean (constants.py).
 `docs/STEP25_REVIEW.md` written.
 
 **Step 25 APPROVED by user 2026-05-06. Post-v1 enhancement plan complete.**
+
+---
+
+### Session — 2026-05-06 — v1.0 deployment + v2 branch + Steps 26–31 planned
+
+**v1.0 deployment:**
+- Dev overlay (FPS / Polys / Position / Cubes stats) removed from `hud.py` and `main.py`.
+- `MAX_HUD_CACHE_ENTRIES` reduced 9 → 5; stat block reduced to 4 lines; assert updated.
+- Tagged `v1.0` on `master`; pushed to GitHub Pages.
+
+**v2 branch created from `v1.0`:**
+- `git checkout -b v2` off the v1.0 tag.
+- All v2 work stays on this branch; merge to `master` only on explicit user approval.
+
+**Step 26 — Turbo freeze exploit fix (APPROVED 2026-05-06):**
+- Bug: rapid F tapping reset `_tick_elapsed = 0.0` in `tick_interval.setter`,
+  allowing the wave to be frozen indefinitely.
+- Fix: `self._tick_elapsed = max(0.0, value - 1e-6)` — fires a tick on the next
+  frame instead of restarting the countdown. Overshoot assertion safety verified:
+  DT_CLAMP - 1e-6 ≈ 0.1 s < AVALANCHE_TICK_INTERVAL = 0.12 s ✓.
+- ruff + mypy: clean. All 4 panel reviewers: APPROVED.
+- `docs/STEP26_REVIEW.md` written. User approved; NOT merged to master yet.
+
+**v2 vision specified by user:**
+1. All waves in a stage visible simultaneously at stage start (grey pending cubes).
+2. Rolling sine-wave animation at each stage start.
+3. Player-following camera, much closer, same isometric angle.
+4. As many stages as there are tick-speed increases (~10 stages total).
+5. Smoother/higher-resolution graphics (anti-aliased edges, 1280×720).
+
+**v2 plan written to `docs/PLAN_V2.md` — Steps 27–31:**
+- Step 27 (V1): Player-following camera + zoom — `renderer.rebuild_vp()` per frame;
+  `CAMERA_FOLLOW_OFFSET = (0, 10, -18)`; `player.world_pos` property.
+- Step 28 (V2): All waves visible + activation system — `GRID_DEPTH` → 60;
+  `Cube.pending` flag; `_spawn_all_waves()` + `_activate_wave(idx)`.
+- Step 29 (V3): Stage intro rolling animation — `GamePhase.STAGE_INTRO`;
+  sinusoidal y-offset per cube keyed on `grid_z` and `elapsed`.
+- Step 30 (V4): Stages 3–10 — explicit 10-entry tick-speed table; new wave data
+  for each stage; up to 7 waves × 5 rows at Stage 10.
+- Step 31 (V5): Graphics rework — 1280×720; `pygame.draw.aalines` for
+  anti-aliased cube edges; ~2× effective cube pixel size from Step 27 zoom.
+
+**Next step: Step 27 (player-following camera).**
