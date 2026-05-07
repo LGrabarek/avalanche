@@ -1,6 +1,6 @@
 # Avalanche — v2 Plan
 
-## Status: Step 26 (turbo freeze bug fix) — IN PROGRESS
+## Status: Step 26 (turbo freeze bug fix) — APPROVED 2026-05-06
 
 v2 work lives on the `v2` branch. All changes are localhost-tested and panel-reviewed
 before merging to `master` / deploying to GitHub Pages.
@@ -26,7 +26,7 @@ Step numbering continues from v1 (Steps 1–25).
 
 | Step | ID  | Description                       | Phase A (Dev) | Phase B (Test) | Status      |
 |------|-----|-----------------------------------|---------------|----------------|-------------|
-| 26   | BF1 | Turbo freeze exploit fix          | IN PROGRESS   | NOT STARTED    | IN PROGRESS |
+| 26   | BF1 | Turbo freeze exploit fix          | APPROVED      | APPROVED       | APPROVED 2026-05-06 |
 
 **Phase A values:** `NOT STARTED` → `IN PROGRESS` → `AWAITING USER`
 **Phase B values:** `NOT STARTED` → `IN PROGRESS` → `APPROVED <date>`
@@ -133,4 +133,6 @@ next position). This is correct UX: turbo should advance the wave, not reset it.
 - Turbo freeze bug analysed in full. Fix designed and applied to
   `wave_manager.py` `tick_interval.setter`.
 - ruff + mypy --strict: clean.
-- Expert panel review pending.
+- Expert panel: all 4 reviewers APPROVED.
+- `docs/STEP26_REVIEW.md` written. User approved 2026-05-06.
+- Not yet merged to master (user's explicit instruction).
