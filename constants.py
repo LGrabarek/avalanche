@@ -99,28 +99,43 @@ FAR_PLANE: float = 100.0
 
 # Step 27 — fixed-vantage follow camera used during all gameplay phases.
 #
-# The camera eye is FIXED in world space.  Each frame, the look-at target
-# is set to player.world_pos so the camera pivots/swivels to keep the
-# player centred.  Because the eye never translates, the world does not
-# appear to slide — only the viewing direction changes.
+# The camera eye is FIXED in world space.  Each frame, a smoothly-lerped
+# look-at target tracks the player's floor tile via exponential decay
+# (CAMERA_FOLLOW_SMOOTH).  Because the eye never translates, the world
+# stays spatially anchored; only the viewing direction swivels gently.
 #
-# Eye position geometry:
-#   eye = (3.0, 10.0, 2.0)
-#   At player spawn (3.5, 0, 21.5):
-#     distance ≈ 21.9 u  (vs 33 u overview — noticeably more intimate)
-#     elevation = atan2(10, 19.5) ≈ 27°  (near the 28° overview angle)
-#   Horizontal swivel range (player at grid edge, tile-centred):
-#     left edge  x=0 → target.x=0.5, dx=−2.5 → 7.3° left  swivel
-#     right edge x=6 → target.x=6.5, dx=+3.5 → 10.2° right swivel
-#     Asymmetric because eye.x=3.0 ≠ grid midpoint 3.5; total ~18°,
-#     well under the ~30° threshold where camera motion is noticeable.
-#   As the player retreats toward the front edge (lower z), the elevation
-#   increases and distance shortens, creating increasing visual tension.
+# Eye position:  (3.0, 12.0, −2.0)
 #
-# CAMERA_FOLLOW_FOV: narrower than the 50° overview to reduce peripheral
-# distortion at close range and give a more cinematic, intimate feel.
-CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 10.0, 2.0)
+#   eye.z = −2: the eye sits TWO UNITS BEHIND the front edge (z = 0).
+#   Every valid player position has target.z ≥ 0.5, so the look-at
+#   vector ALWAYS points in the +z direction.  This keeps the screen-space
+#   mapping of A/D consistent with the world frame at every player z —
+#   D (world +x) is always screen-right, A (world −x) always screen-left,
+#   regardless of how far the player has retreated toward the front edge.
+#   With eye.z = +2 the camera looked BACKWARD once the player crossed
+#   z = 2, swapping A/D — this fixes that.
+#
+#   eye.y = 12 (raised from 10 to compensate for moving 4 units farther
+#   back in z, preserving the ~27° elevation at spawn):
+#     At player spawn (3.5, 0, 21.5):
+#       horiz dist = sqrt(0.5² + 23.5²) ≈ 23.5 u
+#       elevation  = atan2(12, 23.5) ≈ 27°  (matches 28° overview)
+#       total dist ≈ 26.1 u  (still more intimate than 33 u overview)
+#
+#   Horizontal swivel range (tile-centred):
+#     left  x=0 → dx=−2.5, dz=23.5 → atan2(2.5,23.5) ≈ 6.1°
+#     right x=6 → dx=+3.5, dz=23.5 → atan2(3.5,23.5) ≈ 8.5°
+#     Total ~15° — sub-perceptual as camera motion.
+#
+# CAMERA_FOLLOW_SMOOTH: exponential-decay coefficient (s⁻¹).
+#   alpha = 1 − exp(−k·dt).  k=5 → ~45% per MOVE_COOLDOWN (0.12 s);
+#   ~92% catch-up in 0.5 s.  The camera glides rather than snapping.
+#
+# CAMERA_FOLLOW_FOV: narrower than 50° overview to reduce peripheral
+# distortion at close range.
+CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 12.0, -2.0)
 CAMERA_FOLLOW_FOV: float = 42.0
+CAMERA_FOLLOW_SMOOTH: float = 5.0
 
 
 # --- Face shading -------------------------------------------------------------

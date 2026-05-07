@@ -5,6 +5,7 @@ Step 9A: Wave progression, Perfect bonus, I.Q. scoring, VICTORY overlay.
 """
 
 import asyncio
+import math
 
 import pygame
 
@@ -12,6 +13,7 @@ from audio import AudioSystem
 from constants import (
     CAMERA_FOLLOW_EYE,
     CAMERA_FOLLOW_FOV,
+    CAMERA_FOLLOW_SMOOTH,
     CAMERA_POS,
     CAMERA_TARGET,
     DANGER_TOP_COLOR,
@@ -476,6 +478,45 @@ def _draw_victory_overlay(
         _ = screen.blit(surface, (cx, start_y + i * line_h))  # no dirty-rect
 
 
+# --- Camera -------------------------------------------------------------------
+
+def _update_smooth_camera(
+    renderer: Renderer,
+    player: Player,
+    in_follow: bool,
+    cam_xz: list[float],
+    prev_in_follow: bool,
+    dt: float,
+) -> None:
+    """Rebuild the VP matrix with a smooth pivot follow or fixed overview camera.
+
+    When `in_follow` is True the eye is fixed at CAMERA_FOLLOW_EYE and the
+    look-at target exponentially decays toward the player's floor tile, turning
+    discrete 1-tile hops into a continuous camera glide.  On the first follow-
+    camera frame after an overview phase (start / restart) the target snaps
+    instantly to the player's spawn position — no slow pan across the board.
+
+    When `in_follow` is False (TITLE, GAME_OVER, VICTORY) the fixed overview
+    camera is used unchanged.
+
+    `cam_xz` is a two-element mutable list [x, z] updated in-place.
+    """
+    assert len(cam_xz) == 2, "cam_xz must be a two-element [x, z] list"
+    if in_follow:
+        wx, _, wz = player.world_pos
+        if not prev_in_follow:
+            cam_xz[0], cam_xz[1] = wx, wz              # snap on phase transition
+        else:
+            alpha = 1.0 - math.exp(-CAMERA_FOLLOW_SMOOTH * dt)
+            cam_xz[0] += (wx - cam_xz[0]) * alpha
+            cam_xz[1] += (wz - cam_xz[1]) * alpha
+        renderer.rebuild_vp(
+            CAMERA_FOLLOW_EYE, (cam_xz[0], 0.0, cam_xz[1]), CAMERA_FOLLOW_FOV
+        )
+    else:
+        renderer.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
+
+
 # --- Entry point --------------------------------------------------------------
 
 async def main() -> None:
@@ -505,6 +546,11 @@ async def main() -> None:
     running = True
     paused: bool = False
     menu_selected: int = 0  # highlighted item index in the pause menu
+    # Smoothed camera look-at target: [x, z] lerped toward player's floor tile.
+    # Initialised to spawn position so the very first frame has the correct view.
+    _wp0 = player.world_pos
+    cam_xz: list[float] = [_wp0[0], _wp0[2]]
+    prev_in_follow: bool = game.phase in _FOLLOW_CAMERA_PHASES
 
     # Rule 2 — top-level event loop exception. This is the ONE bounded-by-user
     # loop in the application; every nested loop we write must have an
@@ -545,15 +591,9 @@ async def main() -> None:
         effects.update(dt)
 
         # --- Camera update ----------------------------------------------------
-        # Pivot camera: eye is fixed in world space; only the look-at target
-        # rotates as the player moves. This avoids the world-sliding dizziness
-        # of a translation camera — the grid stays spatially anchored while
-        # the viewing angle gently swivels (≤8.7° horizontal at grid edge).
-        # Non-gameplay screens revert to the fixed overview camera.
-        if game.phase in _FOLLOW_CAMERA_PHASES:
-            renderer.rebuild_vp(CAMERA_FOLLOW_EYE, player.world_pos, CAMERA_FOLLOW_FOV)
-        else:
-            renderer.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
+        in_follow = game.phase in _FOLLOW_CAMERA_PHASES
+        _update_smooth_camera(renderer, player, in_follow, cam_xz, prev_in_follow, dt)
+        prev_in_follow = in_follow
 
         player_visual = PlayerVisual.CRUSHED if player.is_crushed else PlayerVisual.NORMAL
         danger = wave.danger_cubes(grid.front_edge_z)
