@@ -128,14 +128,14 @@ FAR_PLANE: float = 100.0
 #     Total ~15° — sub-perceptual as camera motion.
 #
 # CAMERA_FOLLOW_SMOOTH: exponential-decay coefficient (s⁻¹).
-#   alpha = 1 − exp(−k·dt).  k=5 → ~45% per MOVE_COOLDOWN (0.12 s);
-#   ~92% catch-up in 0.5 s.  The camera glides rather than snapping.
+#   alpha = 1 − exp(−k·dt).  k=2.5 → ~26% per MOVE_COOLDOWN (0.12 s);
+#   ~71% catch-up in 0.5 s; ~92% in 1 s.  Noticeably weighted glide.
 #
 # CAMERA_FOLLOW_FOV: narrower than 50° overview to reduce peripheral
 # distortion at close range.
 CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 12.0, -2.0)
 CAMERA_FOLLOW_FOV: float = 42.0
-CAMERA_FOLLOW_SMOOTH: float = 5.0
+CAMERA_FOLLOW_SMOOTH: float = 2.5
 
 
 # --- Face shading -------------------------------------------------------------
