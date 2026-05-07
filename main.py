@@ -10,8 +10,8 @@ import pygame
 
 from audio import AudioSystem
 from constants import (
+    CAMERA_FOLLOW_EYE,
     CAMERA_FOLLOW_FOV,
-    CAMERA_FOLLOW_OFFSET,
     CAMERA_POS,
     CAMERA_TARGET,
     DANGER_TOP_COLOR,
@@ -545,16 +545,13 @@ async def main() -> None:
         effects.update(dt)
 
         # --- Camera update ----------------------------------------------------
-        # Rebuild the VP matrix every frame so the view tracks the player
-        # during gameplay. Non-gameplay screens revert to the overview camera.
+        # Pivot camera: eye is fixed in world space; only the look-at target
+        # rotates as the player moves. This avoids the world-sliding dizziness
+        # of a translation camera — the grid stays spatially anchored while
+        # the viewing angle gently swivels (≤8.7° horizontal at grid edge).
+        # Non-gameplay screens revert to the fixed overview camera.
         if game.phase in _FOLLOW_CAMERA_PHASES:
-            wx, wy, wz = player.world_pos
-            ox, oy, oz = CAMERA_FOLLOW_OFFSET
-            renderer.rebuild_vp(
-                (wx + ox, wy + oy, wz + oz),
-                (wx, wy, wz),
-                CAMERA_FOLLOW_FOV,
-            )
+            renderer.rebuild_vp(CAMERA_FOLLOW_EYE, player.world_pos, CAMERA_FOLLOW_FOV)
         else:
             renderer.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
 
