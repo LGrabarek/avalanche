@@ -18,15 +18,50 @@ ColorRGB = tuple[int, int, int]
 
 # --- Display ------------------------------------------------------------------
 
-SCREEN_WIDTH: int = 960
-SCREEN_HEIGHT: int = 640
+SCREEN_WIDTH: int = 1280    # Step 31: 960 → 1280 (wider 16:9 canvas)
+SCREEN_HEIGHT: int = 720    # Step 31: 640 → 720 (true 16:9 aspect)
 
 
 # --- Grid ---------------------------------------------------------------------
 
-GRID_WIDTH: int = 7      # X-axis tile count
-GRID_DEPTH: int = 25     # Z-axis tile count (rows)
+GRID_WIDTH: int = 11     # Maximum X-axis tile count across all stages.
+                         # Step 32: 7 → 11 (stages 9-10 use all 11 columns).
+                         # Active width per stage is STAGE_GRID_WIDTHS[stage_index].
+# GRID_DEPTH must fit all waves packed against the back of the grid (Step 33).
+# All stages have exactly 4 waves; rows/wave follows STAGE_ROWS_PER_WAVE.
+# Waves pack backward from z=GRID_DEPTH-1; wave 0 (first) is closest to player.
+# Stage 1 (4w × 2r): wave-0 front z=52.  Stage 10 (4w × 7r): wave-0 front z=32.
+# Player spawn is fixed at PLAYER_SPAWN_Z=21 and persists across stage transitions.
+GRID_DEPTH: int = 60     # Z-axis tile count (rows); Step 32: 40 → 60.
+
+# Per-stage active grid width (0-based stage index). Width increases at stage 5
+# (9 columns) and stage 9 (11 columns) to add spatial complexity.
+STAGE_GRID_WIDTHS: list[int] = [7, 7, 7, 7, 9, 9, 9, 9, 11, 11]
+assert len(STAGE_GRID_WIDTHS) == 10, "STAGE_GRID_WIDTHS must have one entry per stage"
+assert all(1 <= w <= GRID_WIDTH for w in STAGE_GRID_WIDTHS), (
+    "every STAGE_GRID_WIDTHS entry must be in [1, GRID_WIDTH]"
+)
+
+# Per-stage rows per wave (0-based stage index).  Sequence: 2,3,3,4,4,5,5,6,6,7 —
+# increases by one every other stage, giving a "tutorial" at each new depth
+# before the tick speed increase for the following stage.
+STAGE_ROWS_PER_WAVE: list[int] = [2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
+assert len(STAGE_ROWS_PER_WAVE) == 10, "STAGE_ROWS_PER_WAVE must have one entry per stage"
+
+# Step 32 design (front-packing): gap between player spawn and wave 0 front row.
+# Superseded in Step 33: waves now pack against z = GRID_DEPTH-1 (back-packing).
+# Retained for documentation; no longer used in z-start computation.
+WAVE_FRONT_GAP: int = 4  # DEPRECATED Step 33
 TILE_SIZE: float = 1.0   # World-space unit per tile
+
+# Gap between consecutive waves when all stage waves are laid out as pending
+# cubes at stage start.  0 = waves are packed immediately adjacent (no gap
+# rows between the front of one wave and the back of the next).
+WAVE_GAP_ROWS: int = 0
+
+# Visual colour for pending (not-yet-active) cubes.  Uniform grey so they
+# read as "coming soon" without being mistaken for any active cube type.
+PENDING_CUBE_COLOR: ColorRGB = (90, 90, 90)
 
 
 # --- Timing -------------------------------------------------------------------
@@ -42,9 +77,20 @@ assert len(STAGE_TICK_INTERVALS) > 0, "STAGE_TICK_INTERVALS must not be empty"
 TICK_SPEED_DECAY: float = 0.9
 
 # Per-stage avalanche tick intervals (0-based stage index).
-# Both values must be > DT_CLAMP (0.1 s) — see WaveManager.update() overshoot
-# assertion. Stage 1 (index 0): 0.15 s. Stage 2 (index 1): 0.12 s.
-STAGE_AVALANCHE_TICK_INTERVALS: list[float] = [0.15, 0.12]
+# All values must be > DT_CLAMP (0.1 s) — see WaveManager.update() overshoot
+# assertion. Stages 3–10 (index 2–9) share the minimum of 0.11 s (≈ 9 ticks/s).
+STAGE_AVALANCHE_TICK_INTERVALS: list[float] = [
+    0.15,   # Stage 1  — gentle avalanche
+    0.12,   # Stage 2  — faster avalanche
+    0.11,   # Stage 3  — near-maximum speed
+    0.11,   # Stage 4
+    0.11,   # Stage 5
+    0.11,   # Stage 6
+    0.11,   # Stage 7
+    0.11,   # Stage 8
+    0.11,   # Stage 9
+    0.11,   # Stage 10 — maximum avalanche speed
+]
 assert len(STAGE_AVALANCHE_TICK_INTERVALS) > 0, (
     "STAGE_AVALANCHE_TICK_INTERVALS must not be empty"
 )
@@ -65,6 +111,16 @@ MOVE_COOLDOWN: float = 0.12   # Seconds between player moves
 # Pause between wave-cleared and the next wave spawning. During this window
 # the WAVE_RISING overlay shows (and PERFECT! if the wave was Perfect).
 WAVE_RISING_DURATION: float = 2.0   # Seconds
+# Stage-intro rolling animation.  All pending cubes are visible; a sinusoidal
+# wave sweeps from the back of the grid to the front before wave 0 activates.
+# STAGE_INTRO replaces the initial WAVE_RISING pause at the start of each stage.
+STAGE_INTRO_DURATION: float = 2.8   # Total seconds the animation plays
+INTRO_WAVE_AMPLITUDE: float = 1.2   # Peak Y rise at crest, in world units
+# Half-width (in grid rows) of the single cosine hump that sweeps from the
+# back wall toward the player.  The hump occupies dist_behind ∈ [0, HUMP_W].
+# At HUMP_W=5: the hump spans 5 rows and decays to zero at both edges, so
+# no cube rises the moment the crest arrives (dist=0 → peak) or leaves it.
+INTRO_HUMP_WIDTH: float = 5.0       # Half-width of cosine hump in grid rows
 # Hold before the restart prompt becomes active on the GAME_OVER / VICTORY screen.
 # Prevents accidental skips when the end condition fires mid-keypress.
 # During the hold the prompt is shown dimmed; it brightens when input is accepted.
@@ -81,16 +137,15 @@ END_SCREEN_HOLD: float = 2.0        # Seconds
 # look more dramatic.  Per-stage camera travel (the platform scrolls in the
 # original I.Q.) is explicitly out of scope for this step.
 #
-# Elevation geometry (verified numerically):
-#   direction = target – pos = (0, –15, 28)
-#   elevation = atan2(15, 28) ≈ 28°
-#   front-row vertex z=–0.5, y=0 → y_ndc ≈ –0.61  (safely above –1.0 clip)
-#   back-row  vertex z=24.5, y=0 → y_ndc ≈ +0.30  (safely below +1.0 clip)
-#   front-left corner x=–0.5    → x_ndc ≈ +0.24  (within ±1.0)
-#   back-right corner x=6.5     → x_ndc ≈ –0.12  (within ±1.0)
+# Elevation geometry (Step 28 values, GRID_DEPTH=40):
+#   eye = (3.0, 15.0, -8.5)  target = (3.0, 0.0, 19.5)
+#   direction = (0, -15, 28), elevation = atan2(15, 28) ≈ 28°
+#   front-row z=0 tiles: 8.5 u from eye > NEAR_PLANE=0.1 ✓
+#   back-row  z=39 tiles: 48 u from eye < FAR_PLANE=100  ✓
+#   horizontal angle to back-right corner (6.5, 0, 39.5) ≈ 4° vs half-angle 35° ✓
 
 _GRID_CENTER_X: float = (GRID_WIDTH - 1) * 0.5
-_GRID_CENTER_Z: float = (GRID_DEPTH - 1) * 0.5   # = 12.0 for GRID_DEPTH=25
+_GRID_CENTER_Z: float = (GRID_DEPTH - 1) * 0.5   # = 29.5 for GRID_DEPTH=60
 CAMERA_POS: tuple[float, float, float] = (_GRID_CENTER_X, 15.0, _GRID_CENTER_Z - 28.0)
 CAMERA_TARGET: tuple[float, float, float] = (_GRID_CENTER_X, 0.0, _GRID_CENTER_Z)
 CAMERA_FOV: float = 50.0     # Widened from 45° in Step 6B to keep full grid in frame
@@ -139,9 +194,35 @@ FAR_PLANE: float = 100.0
 # CAMERA_FOLLOW_FOV: narrower than 50° overview to reduce peripheral
 # distortion at close range.
 CAMERA_FOLLOW_EYE: tuple[float, float, float] = (3.0, 7.8, 2.0)
+# Step 32 note: CAMERA_FOLLOW_EYE[0] (x=3.0) is no longer used directly.
+# main.py computes eye_x = (grid.width - 1) * 0.5 at runtime so the camera
+# is always centred over the active grid width.  CAMERA_FOLLOW_EYE[1] (y=7.8)
+# and CAMERA_FOLLOW_EYE[2] (z=2.0) are still used as base height and depth.
 CAMERA_FOLLOW_FOV: float = 42.0
 CAMERA_FOLLOW_SMOOTH: float = 2.0
-CAMERA_FOLLOW_TARGET_Z_MIN: float = 2.5   # eye.z (2.0) + 0.5 clearance
+CAMERA_FOLLOW_TARGET_Z_MIN: float = 2.5  # DEPRECATED Step 33 — dynamic floor
+# main.py now uses max(eye_z + 0.5, cam_xz[1]) where eye_z = player.world_z
+# - CAMERA_EYE_Z_OFFSET, so this constant is no longer read at runtime.
+# Per-wave camera elevation lift: eye-Y is multiplied by
+#   (1 + wave_index * CAMERA_WAVE_EYE_Y_SCALE)
+# Step 32: 0.10 → 0.15 so each of the 4 waves raises the viewpoint 15%,
+# giving wave_index 3 → 1.45× base height. Needed because row counts now
+# reach 7 rows/wave (Stage 10) — a taller wall that would be clipped at 0.10.
+CAMERA_WAVE_EYE_Y_SCALE: float = 0.15
+# Step 33: Camera eye Z tracks the player position, maintaining a fixed offset.
+# CAMERA_EYE_Z_OFFSET = PLAYER_SPAWN_Z + 0.5 − CAMERA_FOLLOW_EYE[2] = 19.5
+# eye_z = player.world_z − CAMERA_EYE_Z_OFFSET
+CAMERA_EYE_Z_OFFSET: float = 19.5
+# Exponential-decay rate for smoothing eye-Y between waves (per second).
+# At 1.5 rad/s: 63% of the step is covered in ~0.67 s (comfortably within
+# the 2-second WAVE_RISING pause, so the camera is settled before the next
+# wave's cubes are visible).
+CAMERA_EYE_Y_LERP: float = 1.5
+# Exponential-decay rate for smoothing eye-Z each frame (per second).
+# At 6.0 rad/s: 63% catchup in 0.17 s, 95% in 0.5 s. Fast enough to feel
+# responsive to player movement (MOVE_COOLDOWN=0.12 s), slow enough to
+# eliminate the 1-unit-per-hop jerk when the player walks toward the wave.
+CAMERA_EYE_Z_LERP: float = 6.0
 
 
 # --- Face shading -------------------------------------------------------------
@@ -219,6 +300,7 @@ class Direction(Enum):
 
 class GamePhase(Enum):
     TITLE = "title"
+    STAGE_INTRO = "stage_intro"  # Rolling-wave animation before wave 0 activates
     WAVE_RISING = "wave_rising"
     WAVE_ACTIVE = "wave_active"
     WAVE_CLEARING = "wave_clearing"
@@ -241,6 +323,10 @@ class CubeTypeInfo(TypedDict):
     # in cube_data.get_cube_faces() — no per-face hand-coding needed.
     base_color: ColorRGB
     edge_color: ColorRGB
+    # Step 31: edge outlines are drawn with pygame.draw.aalines (always 1px).
+    # edge_width=1 → single aalines pass.
+    # edge_width=2 → two offset aalines passes, giving a visually thicker outline.
+    # Only CubeType.FORBIDDEN uses edge_width=2 (distinctive thick red border).
     edge_width: int
     on_capture: CubeBehavior
     on_missed: CubeBehavior
@@ -316,10 +402,13 @@ DANGER_TOP_COLOR: ColorRGB = (255, 220, 0)
 
 PLAYER_HALF_EXTENT: float = 0.4    # Total edge = 0.8, slightly smaller than a tile
 PLAYER_CENTER_Y: float = 0.4       # Center-Y so player sits on the platform
-PLAYER_SPAWN_X: int = GRID_WIDTH // 2
-# Spawn 3 rows in front of the first wave row. Clamped to 0 so a shallow
-# grid degrades to front-row spawn rather than going off-map.
-PLAYER_SPAWN_Z: int = max(0, GRID_DEPTH - 1 - 3)
+PLAYER_SPAWN_X: int = 3  # Centre of the initial 7-wide Stage-1 grid (GRID_WIDTH // 2
+                         # would give 5 at the post-Step-32 maximum width of 11, which
+                         # is wrong for Stage 1).  Player.reset() uses grid.width // 2
+                         # at runtime so the player is always centred on stage transitions.
+# Step 33: waves are back-packed from z=GRID_DEPTH-1; PLAYER_SPAWN_Z is the
+# starting row for the player at game start. The camera eye tracks player Z.
+PLAYER_SPAWN_Z: int = 21
 PLAYER_COLORS: dict[str, ColorRGB] = {
     "top": (130, 200, 255),     # Brighter luminance so the player reads clearly
     "front": (80, 160, 230),    # against the bluish-gray tile top (90, 90, 110).
@@ -345,7 +434,18 @@ PERFECT_BONUS_MAX: int = 10000
 
 # --- I.Q. Algorithm tables (from research doc) --------------------------------
 
-IQ_DIFFICULTY_MULTIPLIERS: list[float] = [1.00, 1.25, 1.33, 1.45, 1.50]
+IQ_DIFFICULTY_MULTIPLIERS: list[float] = [
+    1.00,   # Stage 1
+    1.25,   # Stage 2
+    1.33,   # Stage 3
+    1.45,   # Stage 4
+    1.50,   # Stage 5
+    1.65,   # Stage 6
+    1.80,   # Stage 7
+    1.95,   # Stage 8
+    2.15,   # Stage 9
+    2.35,   # Stage 10
+]
 IQ_PERCENTAGE_MULTIPLIERS: list[float] = [
     0.00060, 0.00055, 0.00050, 0.00045, 0.00040,
     0.00035, 0.00030, 0.00025, 0.00020,

@@ -103,6 +103,13 @@ Steps 3+ are split into **Phase A (Development)** and **Phase B (Testing)** per 
 | 23 | Movement perpendicular priority | APPROVED 2026-05-02 | APPROVED 2026-05-02 | APPROVED 2026-05-02 |
 | 24 | Camera rework | APPROVED 2026-05-03 | APPROVED 2026-05-03 | APPROVED 2026-05-03 |
 | 25 | Audio system | APPROVED 2026-05-06 | APPROVED 2026-05-06 | APPROVED 2026-05-06 |
+| 26 | Turbo freeze exploit fix | APPROVED 2026-05-06 | APPROVED 2026-05-06 | APPROVED 2026-05-06 |
+| 27 | Player-following camera + zoom | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 28 | All waves visible + activation system | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 29 | Stage intro rolling animation (tsunami) | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 30 | Stages 3–10 full progression | APPROVED 2026-05-07 | AWAITING USER | IN PROGRESS |
+| 31 | Graphics rework (1280×720 + aalines) | AWAITING USER | NOT STARTED | IN PROGRESS |
+| 32 | Multi-file stage/wave/grid redesign | AWAITING USER | NOT STARTED | IN PROGRESS |
 
 **Phase A values:** `NOT STARTED` → `IN PROGRESS` → `AWAITING USER` (code done, panel clean, STEP<N>_REVIEW.md written).
 **Phase B values:** `NOT STARTED` → `IN PROGRESS` (user testing / fix cycle) → `APPROVED <date>`.
@@ -1158,4 +1165,246 @@ Tooling: ruff + mypy --strict clean (constants.py).
 - Step 31 (V5): Graphics rework — 1280×720; `pygame.draw.aalines` for
   anti-aliased cube edges; ~2× effective cube pixel size from Step 27 zoom.
 
-**Next step: Step 27 (player-following camera).**
+**Step 27 — APPROVED.**
+**Step 28 — APPROVED 2026-05-07.**
+
+Step 28 final state (after iterative user feedback):
+- All stage waves spawn as grey pending cubes at stage start; activate wave-by-wave.
+- Waves packed at the far end of the grid (GRID_DEPTH-1 downward), not from the player.
+- Stage depth = stage number + 1: Stage 1 → 2 rows/wave; Stage 2 → 3 rows/wave.
+  Pattern continues: Stage N has (N+1) rows per wave.
+- All rows fully filled (no empty columns, no gap rows between waves: WAVE_GAP_ROWS=0).
+- Camera eye-Y raised 10% per wave_index within a stage (CAMERA_WAVE_EYE_Y_SCALE=0.10):
+  wave 0 → baseline (7.8), wave 3 → 1.3× (10.14), keeping the deeper wall in frame.
+- GRID_DEPTH=40; Stage 1 wall at z=32–39; Stage 2 wall at z=28–39.
+
+**Step 29 — APPROVED 2026-05-07.**
+
+Step 29 final state (after iterative user feedback):
+- `GamePhase.STAGE_INTRO` added to enum (between TITLE and WAVE_RISING).
+- New constants: `STAGE_INTRO_DURATION=2.8`, `INTRO_WAVE_AMPLITUDE=1.2`, `INTRO_HUMP_WIDTH=5.0`.
+- `game_manager.py`: `_intro_elapsed` field + property; `wave_front_z` property;
+  `update()` STAGE_INTRO branch; `on_title_advance()` → STAGE_INTRO;
+  `_on_stage_complete()` → STAGE_INTRO.
+- `main.py`: `_intro_y_bias(gz, intro_t, z_front_limit)` — single cosine hump
+  travelling front-to-back (player side → back wall); crest starts at
+  `z_front_limit − HUMP_W − 1` (off-screen) and ends at `z_back + HUMP_W`
+  (off-screen); no cube rises at t=0 or t=1 (no visual pop). `_build_cube_faces()`
+  lifts all cube vertices by y_bias during animation. `STAGE_INTRO` in frozen + follow-camera sets.
+- Phase flow: TITLE → key → STAGE_INTRO (2.8 s animation) → WAVE_ACTIVE.
+  Within-stage wave transitions still use the 2-second WAVE_RISING pause.
+- Expert panel: all 4 reviewers APPROVED.
+- `docs/STEP29_REVIEW.md` written.
+
+**Step 30 — APPROVED 2026-05-07.**
+
+Step 30 final state:
+- `wave_data.py`: Module docstring updated. Stages 3–10 added (44 new WaveData objects).
+  Stage 3: 4w×4r (wave_front_z=36). Stages 4–5: 5w×3r (wave_front_z=37).
+  Stages 6–10: 6w×3r (wave_front_z=37, 1-tile gap from player).
+  All new rows obey A/F ≥2-column-separation blast safety rule.
+- `constants.py`: `IQ_DIFFICULTY_MULTIPLIERS` extended to 10 entries (1.00→2.35).
+  `STAGE_AVALANCHE_TICK_INTERVALS` extended to 10 entries (0.15→0.11, all > DT_CLAMP).
+  GRID_DEPTH comment updated to document all 10 stage layouts.
+- Wave tick speed scales via existing `TICK_SPEED_DECAY=0.9` formula:
+  1.20s (S1-2) → 1.08s (S3-4) → 0.97s (S5-6) → 0.87s (S7-8) → 0.79s (S9-10).
+- No game-logic changes; `GameManager` was already designed for N stages.
+- ruff + mypy --strict: clean (14 source files).
+- Expert panel: Code Quality APPROVED (pre-existing S2W1 adjacency correctly identified,
+  not a Step 30 regression), Vision Lead APPROVED, UX Tester APPROVED, Platform Engineer APPROVED.
+- `docs/STEP30_REVIEW.md` written.
+
+**Step 31 — AWAITING USER.**
+
+Step 31 final state:
+- `constants.py`: `SCREEN_WIDTH` 960 → 1280; `SCREEN_HEIGHT` 640 → 720 (true 16:9).
+- `renderer.py`: `render_frame()` draws cube edges with `pygame.draw.aalines`
+  (anti-aliased 1 px) instead of `polygon(..., edge_width)`. FORBIDDEN cubes
+  (`edge_width=2`) get a second `aalines` pass at `[(x+1, y) for ...]` to simulate
+  the thick red border.
+- `hud.py`: stale comment fix only.
+- ruff + mypy --strict: clean (14 source files).
+- Expert panel: Code Quality APPROVED (all 11 rules pass; asymmetric offset is
+  documented intent), Vision Lead APPROVED (16:9 suits isometric; aalines preserves
+  retro feel), UX Tester APPROVED (fill colors are primary identification cue; NORMAL
+  edge unchanged), Platform Engineer APPROVED (+50% pixels acceptable; aalines cheaper
+  than thick polygon; bonus: fb_ar=1.77 in custom.tmpl now correct for 16:9).
+- `docs/STEP31_REVIEW.md` written.
+
+**Next step: awaiting user direction.**
+
+### Session — 2026-05-14 — Step 32 Phase A (Multi-file stage/wave/grid redesign)
+
+**Changed files (Step 32):**
+
+- `constants.py` — `GRID_WIDTH: int = 11` (was 7; max tile array width); `GRID_DEPTH: int = 60`
+  (was 40; accommodates 10 stages × 4 waves × 7 rows from z=26 to z=53).
+  Added `STAGE_GRID_WIDTHS: list[int] = [7,7,7,7,9,9,9,9,11,11]` (active width per stage, 0-based).
+  Added `STAGE_ROWS_PER_WAVE: list[int] = [2,3,3,4,4,5,5,6,6,7]` (rows per wave per stage).
+  Added `WAVE_FRONT_GAP: int = 4` (empty tiles between player spawn and first wave row).
+  Changed `CAMERA_WAVE_EYE_Y_SCALE: float = 0.10 → 0.15` (15% camera Y rise per wave index).
+  `PLAYER_SPAWN_Z = 21` (was 17; consistent with WAVE_FRONT_GAP=4, z_front=26).
+  Module-level asserts verify list lengths == 10 for both stage tables.
+
+- `grid_manager.py` — Added `resize(new_width: int) -> None` method: validates
+  `1 ≤ new_width ≤ GRID_WIDTH`, reallocates `_tiles` to `new_width * _depth` PLATFORM
+  entries, clears `_marked`. All prior API unchanged. `GridManager.__init__` gains an
+  optional `width: int = GRID_WIDTH` parameter.
+
+- `wave_data.py` — `WaveData.__init__` validation changed from `len(row) != GRID_WIDTH`
+  (broken for narrower rows) to: validate consistent width ≤ GRID_WIDTH, reject
+  inconsistencies. `spawn_positions` mirror formula changed from `GRID_WIDTH-1-col` to
+  `row_width-1-col` (correct for all widths). Import cleaned (`STAGE_ROWS_PER_WAVE`
+  removed — not needed at module level). Full rewrite of Stages 1–10 wave data:
+  - Every stage now has exactly **4 waves** (was 4, 5, or 6).
+  - Row counts follow `STAGE_ROWS_PER_WAVE`: 2,3,3,4,4,5,5,6,6,7.
+  - Grid widths follow `STAGE_GRID_WIDTHS`: 7,7,7,7,9,9,9,9,11,11.
+  - All A/F adjacency ≥ 2 columns (blast safety rule enforced in all waves).
+  - New `STAGE_10_WAVES` defined (4 waves × 7 rows × 11 cols).
+  - S2W1 fix: F moved from col 3 → col 5 (was adjacent to A@col2, violated blast safety).
+  - S2W3 ideal corrected: 28 → 37 (3 A blasts sweep all 4 inter-A Normals = 9 steps + 28 = 37).
+  - Stage 7 section header ideal corrected: 68 → 64; Stage 8 header: 80 → 76.
+
+- `game_manager.py` — `_compute_wave_z_starts` rewritten: uses `STAGE_ROWS_PER_WAVE`,
+  `WAVE_FRONT_GAP`, `PLAYER_SPAWN_Z`, `WAVE_GAP_ROWS=0`; z_front always 26; waves packed
+  front-to-back with no gap. Added `_cur_grid_width` property (reads `STAGE_GRID_WIDTHS`
+  clamped to table). `_on_stage_complete`: `grid.resize(_cur_grid_width)` before
+  `player.reset()`. `_do_restart`: `grid.resize(STAGE_GRID_WIDTHS[0])` before `player.reset()`.
+
+- `player.py` — `reset()` uses `spawn_x = grid.width // 2` instead of hardcoded
+  `PLAYER_SPAWN_X`. Centres player on all three grid widths (7→3, 9→4, 11→5).
+
+- `main.py` — `GridManager(width=STAGE_GRID_WIDTHS[0])` at construction (Stage-1 active
+  width). `_update_smooth_camera` gains `grid_center_x: float` parameter; `follow_eye[0]`
+  set to `grid_center_x` instead of `CAMERA_FOLLOW_EYE[0]`. Call site passes
+  `(grid.width - 1) * 0.5` each frame (tracks stage transitions automatically).
+
+**Expert panel (all 4 reviewers, fixes applied):**
+- Vision Lead: BLOCKER (fixed) — S2W1 row 0 A@col2/F@col3 violates blast safety (distance 1);
+  fixed to A@col2/F@col5 (distance 3); ideal updated 36→37.
+  CONCERN (fixed) — S2W3 ideal 28 was "conservative" undercount; corrected to 37.
+  CONCERN (fixed) — Stage 7 header showed 68 (S7W3 actual=64); corrected. Stage 8 header
+  showed 80 (S8W4 actual=76); corrected.
+  CONCERN (design note) — W1 opener pattern identical across Stages 4–10; recommend
+  variation in future steps. Non-blocking.
+- Code Quality: Same S2W1 blast-safety CONCERN (same fix applied). CONCERN — overview camera
+  (`CAMERA_POS`) centred at X=5.0 (max-grid centre) rather than active-grid centre; cosmetically
+  hidden under full-screen overlays; noted as advisory. CONCERN — S7W3 inline comment/header
+  mismatch (fixed).
+- UX Tester: CONCERN — `cam_xz` not snapped on stage transitions; latent drift risk only if
+  `STAGE_INTRO_DURATION` is shortened below ~1 s. Non-blocking; documented here.
+  CONCERN — 15%/wave camera Y rise may foreshorten Stage 10 Wave 3 back rows at ~12.5°
+  elevation angle; verify during first live playthrough.
+- Platform Engineer: All 6 criteria APPROVED outright. Grid reallocation (max 660 entries)
+  is sub-millisecond; all new constants WASM-safe; no filesystem access introduced.
+
+**Smoke tests / tooling:**
+- `uv run ruff check .` → all checks passed.
+- `uv run mypy . --strict` → success, no issues in 14 source files.
+- Import smoke test: all 10 stages × 4 waves load correctly; row counts and widths match
+  `STAGE_ROWS_PER_WAVE` and `STAGE_GRID_WIDTHS` exactly.
+- Z-bound check: Stage 10 z_back_last = 53 < GRID_DEPTH=60 ✓.
+- S2W1 assertion: A@col2, F@col5, |distance|=3 ≥ 2, ideal=37 ✓.
+
+`docs/STEP32_REVIEW.md` written. Awaiting user browser verification.
+
+### Session — 2026-05-14 — Step 33 Phase A (Camera / grid / player persistence redesign)
+
+**User request (5 specific changes):**
+1. Back-pack waves against z=GRID_DEPTH-1 (not from player forward).
+2. No grid resize/reset between stages — tile state persists.
+3. Player position preserved between waves and stages (uncrush only, no reset).
+4. Camera eye Z tracks player Z with fixed 19.5-unit offset.
+5. Smooth camera pitch interpolation between waves (not instant snap).
+
+**Changed files (Step 33):**
+
+- `constants.py` — `WAVE_FRONT_GAP` comment marked DEPRECATED Step 33.
+  `CAMERA_FOLLOW_TARGET_Z_MIN` marked DEPRECATED Step 33 (replaced by dynamic floor).
+  Added `CAMERA_EYE_Z_OFFSET: float = 19.5` (derived: PLAYER_SPAWN_Z+0.5 − CAMERA_FOLLOW_EYE[2] = 21.5−2.0).
+  Added `CAMERA_EYE_Y_LERP: float = 1.5` (exponential-decay rate for eye-Y interpolation).
+  Fixed `WAVE_GAP_ROWS` comment (was "2 rows", value is 0).
+  Fixed `_GRID_CENTER_Z` comment (was "= 19.5 for GRID_DEPTH=40", corrected to "= 29.5 for GRID_DEPTH=60").
+  Fixed `PLAYER_SPAWN_Z` comment (removed stale front-packing reference).
+
+- `game_manager.py` — Re-added `STAGE_GRID_WIDTHS` import (for `active_wave_width`).
+  Rewrote `_compute_wave_z_starts`: packs from z=GRID_DEPTH−1 backward; wave 3 always
+  z_back=59; wave 0 closest to player. Formula: `z_back=59; for i in range(n-1,-1,-1):
+  z_front=z_back−row_count+1; z_starts[i]=z_back; z_back=z_front−WAVE_GAP_ROWS−1`.
+  `_on_stage_complete`: removed `grid.resize()` and `player.reset()`; replaced with
+  `player.uncrush()` (grid and player position persist); added `player.clamp_z_before_wave(
+  self.wave_front_z)` after `_spawn_all_waves_pending` (BLOCKER fix — see panel notes).
+  `_do_restart`: calls `grid.reset()` (not `grid.resize()`); `player.reset()` unchanged.
+  Added `active_wave_width` property: `STAGE_GRID_WIDTHS[min(stage_index, 9)]`.
+  Removed unused `STAGE_GRID_WIDTHS` → re-added it for `active_wave_width`.
+
+- `player.py` — Added `GRID_WIDTH` import. Added `max_col: int = GRID_WIDTH−1` parameter
+  to `update()` and `try_move()`; `try_move` checks `new_x > max_col` (blocks movement
+  into outer columns that have no wave cubes; stages 1–4: max_col=6; 5–8: max_col=8;
+  9–10: max_col=10). Both `update` and `try_move` raise `ValueError` for out-of-range
+  `max_col`. Added `clamp_z_before_wave(wave_front_z)` method: no-op if player.grid_z <
+  wave_front_z; scans downward to find nearest valid tile and moves player there (for loop
+  over range(wave_front_z−1,−1,−1), bounded, no while).
+
+- `main.py` — Removed `CAMERA_FOLLOW_TARGET_Z_MIN` and `STAGE_GRID_WIDTHS` imports.
+  Added `CAMERA_EYE_Y_LERP`, `CAMERA_EYE_Z_OFFSET` imports. `GridManager()` initialized
+  with no arguments (default GRID_WIDTH=11; no resize ever occurs).
+  Added `cam_eye_y: list[float] = [CAMERA_FOLLOW_EYE[1]]` (one-element mutable list).
+  Rewrote `_update_smooth_camera`: new params `cam_eye_y, wave_index, grid_center_x`;
+  eye_z = player.world_z − CAMERA_EYE_Z_OFFSET; target_eye_y interpolated at
+  CAMERA_EYE_Y_LERP; clamp `cam_xz[1] = max(eye_z+0.5, cam_xz[1])`.
+  Call site: `player.update(..., max_col=game.active_wave_width−1)`.
+  Asserts on wave_index/grid_center_x converted from `assert` to `raise ValueError`
+  (Code Quality concern — survives -O optimisation).
+
+- `wave_data.py` — Updated module docstring to describe back-packing z values:
+  Stage 1 z_back[0..3] = 53,55,57,59; Stage 2 = 50,53,56,59; Stage 4 = 47,51,55,59;
+  Stage 6 = 44,49,54,59; Stage 8 = 41,47,53,59; Stage 10 = 38,45,52,59.
+
+**Expert panel (all 4 reviewers, fixes applied):**
+- Vision Lead: APPROVED WITH CONCERNS (no blockers). Concern 1 — `try_move` only enforces
+  right column boundary (not left); wave patterns always start at col 0 so left side is
+  always active, but asymmetry noted. Concern 2 — `WAVE_GAP_ROWS` comment stale (fixed).
+- Code Quality: APPROVED WITH CONCERNS. Concern 1 — `assert wave_index >= 0` and
+  `assert grid_center_x >= 0.0` in `_update_smooth_camera` should be `raise ValueError`
+  (fixed). Concern 2 — positional `max_col` at call site (fixed to keyword arg).
+- UX Tester: BLOCKER FOUND (fixed). Player Z can persist into new stage's wave stack at
+  stage transitions (skilled player advancing to z≥48 when Stage 2 wave front = 48 would
+  be spawned inside a cube). Fixed by `player.clamp_z_before_wave(wave_front_z)` called
+  after `_spawn_all_waves_pending`. Other concerns: 31-tile gap at Stage 1 (non-blocking);
+  invisible X-boundary wall for outer columns (non-blocking; left side always active).
+- Platform Engineer: APPROVED WITH CONCERNS. Concern 1 — `CAMERA_FOLLOW_TARGET_Z_MIN`
+  deprecated dead constant (documented, no import elsewhere). Concern 2 — `_GRID_CENTER_Z`
+  comment stale (fixed). All WASM criteria pass; `GridManager()` default width=11 ✓;
+  `grid.reset()` restores full width ✓; `cam_eye_y` aliasing safe ✓.
+
+**Smoke tests / tooling:**
+- `uv run ruff check .` → all checks passed.
+- `uv run mypy . --strict` → success, no issues in 14 source files.
+
+`docs/STEP33_REVIEW.md` written. Awaiting user verification.
+
+**Post-panel user feedback — two additional fixes applied (same session):**
+
+User reported: (1) grid visually wider than the wave cubes (extra columns to the side, player
+blocked from entering them); (2) camera follow still jerky when moving toward the wave.
+
+Fixes applied:
+- `grid_manager.py` — Added `set_active_width(new_width)` method: reformats tile storage
+  to new column count while preserving VOID rows (penalty deletions carry across resize).
+  Pre-allocates `new_tiles` at `new_width * depth` then copies per-row, no unbounded append.
+- `game_manager.py` — `_on_stage_complete`: added `grid.set_active_width(STAGE_GRID_WIDTHS[
+  stage_index])` before wave spawn — grid widens 7→9 at Stage 5, 9→11 at Stage 9, matching
+  wave patterns exactly. `_do_restart`: restored `grid.resize(STAGE_GRID_WIDTHS[0])` (full
+  reset to 7-wide on restart).
+- `constants.py` — Added `CAMERA_EYE_Z_LERP: float = 6.0` (eye-Z smooth rate).
+- `main.py` — `GridManager(width=STAGE_GRID_WIDTHS[0])` (Stage-1 width at init). Added
+  `cam_eye_z: list[float] = [CAMERA_FOLLOW_EYE[2]]`. `_update_smooth_camera` gains
+  `cam_eye_z` parameter; `cam_eye_z[0]` lerps toward `player.world_z − CAMERA_EYE_Z_OFFSET`
+  at CAMERA_EYE_Z_LERP — each tile-hop glides over ~0.5 s instead of jumping 1 unit.
+
+Post-fix: `ruff check` + `mypy --strict` both clean.
+
+**Step 33 APPROVED by user (2026-05-15).**
+
+**Next step: awaiting user direction.**

@@ -275,12 +275,22 @@ class Renderer:
         # as `key=` arguments to sort-like built-ins.
         face_list.sort(key=lambda f: f[1], reverse=True)
 
-        # pygame.draw.polygon returns a Rect bounding the drawn pixels. We do
-        # not use dirty-rect optimization (full-clear every frame), so the
-        # returned rects are not meaningful to us and are discarded to `_`.
+        # pygame.draw.polygon / aalines return a Rect bounding the drawn pixels.
+        # Full-clear every frame means dirty-rect tracking adds no benefit; all
+        # returned rects are discarded to `_`.
+        #
+        # Step 31: cube edges are drawn with pygame.draw.aalines (anti-aliased,
+        # always 1 screen-pixel wide) instead of the previous polygon-outline
+        # draw.  For edge_width > 1 (FORBIDDEN cubes) a second aalines pass is
+        # drawn with every point shifted 1 px to the right, giving a visually
+        # thicker ~2 px outline without requiring gfxdraw or a surface copy.
         for projected_face in face_list:
             screen_points, _depth, fill_color, edge_color, edge_width = projected_face
             int_points = [(int(x), int(y)) for x, y in screen_points]
             _ = pygame.draw.polygon(screen, fill_color, int_points)
-            if edge_color is not None and edge_width > 0:
-                _ = pygame.draw.polygon(screen, edge_color, int_points, edge_width)
+            if edge_color is not None:
+                _ = pygame.draw.aalines(screen, edge_color, True, int_points)
+                if edge_width > 1:
+                    # Second offset pass — 1 px right — simulates a thick outline.
+                    offset_pts = [(x + 1, y) for x, y in int_points]
+                    _ = pygame.draw.aalines(screen, edge_color, True, offset_pts)

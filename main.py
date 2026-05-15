@@ -11,22 +11,31 @@ import pygame
 
 from audio import AudioSystem
 from constants import (
+    CAMERA_EYE_Y_LERP,
+    CAMERA_EYE_Z_LERP,
+    CAMERA_EYE_Z_OFFSET,
     CAMERA_FOLLOW_EYE,
     CAMERA_FOLLOW_FOV,
     CAMERA_FOLLOW_SMOOTH,
-    CAMERA_FOLLOW_TARGET_Z_MIN,
     CAMERA_POS,
     CAMERA_TARGET,
+    CAMERA_WAVE_EYE_Y_SCALE,
     DANGER_TOP_COLOR,
+    GRID_DEPTH,
+    INTRO_HUMP_WIDTH,
+    INTRO_WAVE_AMPLITUDE,
     KEY_DETONATE,
     KEY_MARK,
     KEY_TRIGGER,
     KEY_TRIGGER_ALT,
     KEY_TURBO,
+    PENDING_CUBE_COLOR,
     PLAYER_HALF_EXTENT,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     SOUND_ENABLED,
+    STAGE_GRID_WIDTHS,
+    STAGE_INTRO_DURATION,
     GamePhase,
 )
 from cube_data import (
@@ -62,6 +71,7 @@ SHADOW_COLOR: tuple[int, int, int] = (30, 30, 40)
 # (TITLE, GAME_OVER, VICTORY) use the fixed overview camera (CAMERA_POS /
 # CAMERA_TARGET) so the full grid is visible on non-gameplay screens.
 _FOLLOW_CAMERA_PHASES: frozenset[GamePhase] = frozenset({
+    GamePhase.STAGE_INTRO,   # animation plays while all waves are visible
     GamePhase.WAVE_ACTIVE,
     GamePhase.AVALANCHE,
     GamePhase.WAVE_RISING,
@@ -117,30 +127,88 @@ def _build_player_faces(
     return faces
 
 
+def _intro_y_bias(gz: int, intro_t: float, z_front_limit: int) -> float:
+    """Compute the upward Y offset for a cube at grid-z `gz` during STAGE_INTRO.
+
+    Implements a single cosine hump that sweeps from in front of the wave
+    formation (low z, near player) toward the back wall (high z).  The crest
+    travels from `z_front_limit - INTRO_HUMP_WIDTH - 1` at t=0 to
+    `z_back + INTRO_HUMP_WIDTH` at t=1, so:
+
+      * No cube rises at t=0 (crest is off-screen in front of the formation).
+      * No cube rises at t=1 (crest has cleared the back wall — no visual pop).
+
+    Within the hump (dist_passed ∈ [0, INTRO_HUMP_WIDTH]):
+        y_bias = AMPLITUDE × cos(π/2 × dist_passed / INTRO_HUMP_WIDTH)
+    which gives peak height at the crest (dist=0) and zero at the edges.
+
+    `intro_t`: normalised animation time [0, 1].
+    `z_front_limit`: lowest z of wave 0 (from game.wave_front_z).
+    """
+    if intro_t <= 0.0:
+        return 0.0
+    fgz = float(gz)
+    z_back = float(GRID_DEPTH - 1)
+    hump_w = float(INTRO_HUMP_WIDTH)
+    crest_start = float(z_front_limit) - hump_w - 1.0
+    crest_end = z_back + hump_w
+    z_crest = crest_start + intro_t * (crest_end - crest_start)
+    dist_passed = z_crest - fgz  # positive = crest has already passed this cube (lower z)
+    if dist_passed < 0.0:
+        return 0.0  # crest not yet reached this cube (cube at higher z) — floor
+    if dist_passed >= hump_w:
+        return 0.0  # cube is on the trailing side, past the hump — back to floor
+    return INTRO_WAVE_AMPLITUDE * math.cos(math.pi * 0.5 * dist_passed / hump_w)
+
+
 def _build_cube_faces(
     renderer: Renderer,
     wave: WaveManager,
     danger: frozenset[tuple[int, int]],
+    intro_t: float = 0.0,
+    z_front_limit: int = 0,
 ) -> list[ProjectedFace]:
-    """Project the six faces of every live cube in the wave.
+    """Project the six faces of every cube in the wave (active + pending).
 
-    Each cube queries the wave's shared `tumble_progress`, applies the pivot
-    rotation via `get_cube_vertices`, then emits 6 color-tagged faces through
-    the standard projection + back-face-cull pipeline.
-
-    B3e: cubes in `danger` (one tick from the front edge) have their top face
-    (index 0 in _CUBE_FACES) rendered in DANGER_TOP_COLOR as a visual telegraph.
+    Active cubes use their normal palette.
+    Pending cubes (future waves, not yet active) are rendered uniformly in
+    PENDING_CUBE_COLOR (grey) so the player can see the wave layout ahead.
+    B3e: active cubes in `danger` (one tick from the front edge) have their
+    top face overridden with DANGER_TOP_COLOR as a visual telegraph.
+    `intro_t` drives the STAGE_INTRO rolling-wave animation: when non-zero,
+    cubes receive a cosine-hump Y lift sweeping front-to-back (0.0 = off).
+    `z_front_limit` anchors the crest start position (from game.wave_front_z).
     """
+    assert 0.0 <= intro_t <= 1.0, f"intro_t {intro_t} outside [0, 1]"
     faces: list[ProjectedFace] = []
     max_faces = MAX_ACTIVE_CUBES * 6
-    for gx, gz, progress, cube_type in wave.iter_cubes():
+    for gx, gz, progress, cube_type, is_pending in wave.iter_cubes():
         world_verts = get_cube_vertices(gx, gz, progress)
-        is_danger = (gx, gz) in danger
+        if intro_t > 0.0:
+            y_bias = _intro_y_bias(gz, intro_t, z_front_limit)
+            world_verts = tuple(
+                (vx, vy + y_bias, vz) for vx, vy, vz in world_verts
+            )
+        is_danger = (not is_pending) and (gx, gz) in danger
         for face_idx, (face_verts, fill_color, edge_color, edge_width) in enumerate(
             get_cube_faces(world_verts, cube_type)
         ):
-            color = DANGER_TOP_COLOR if (is_danger and face_idx == 0) else fill_color
-            projected = renderer.project_face(face_verts, color, edge_color, edge_width)
+            if is_pending:
+                # Uniform grey fill + neutral edge: hide cube type until wave
+                # activates.  Coloured edges (red FORBIDDEN, green ADVANTAGE)
+                # would leak type information before the wave starts.
+                color = PENDING_CUBE_COLOR
+                eff_edge: tuple[int, int, int] = (50, 50, 50)
+                eff_width = 1
+            elif is_danger and face_idx == 0:
+                color = DANGER_TOP_COLOR
+                eff_edge = edge_color
+                eff_width = edge_width
+            else:
+                color = fill_color
+                eff_edge = edge_color
+                eff_width = edge_width
+            projected = renderer.project_face(face_verts, color, eff_edge, eff_width)
             if projected is not None:
                 faces.append(projected)
     assert len(faces) <= max_faces, (
@@ -486,35 +554,55 @@ def _update_smooth_camera(
     player: Player,
     in_follow: bool,
     cam_xz: list[float],
+    cam_eye_y: list[float],
+    cam_eye_z: list[float],
     prev_in_follow: bool,
     dt: float,
+    wave_index: int,
+    grid_center_x: float,
 ) -> None:
     """Rebuild the VP matrix with a smooth pivot follow or fixed overview camera.
 
-    When `in_follow` is True the eye is fixed at CAMERA_FOLLOW_EYE and the
-    look-at target exponentially decays toward the player's floor tile, turning
-    discrete 1-tile hops into a continuous camera glide.  On the first follow-
-    camera frame after an overview phase (start / restart) the target snaps
-    instantly to the player's spawn position — no slow pan across the board.
+    When `in_follow` is True all three camera quantities smoothly lerp:
+    - `cam_eye_z[0]` tracks `player.world_z − CAMERA_EYE_Z_OFFSET` at
+      CAMERA_EYE_Z_LERP, so each discrete tile hop glides rather than jumps.
+    - `cam_eye_y[0]` tracks the wave-index target at CAMERA_EYE_Y_LERP,
+      giving a smooth pitch rise between waves.
+    - `cam_xz` (look-at X, Z) tracks the player tile at CAMERA_FOLLOW_SMOOTH.
 
-    When `in_follow` is False (TITLE, GAME_OVER, VICTORY) the fixed overview
-    camera is used unchanged.
+    When `in_follow` is False the fixed overview camera is used unchanged.
 
-    `cam_xz` is a two-element mutable list [x, z] updated in-place.
+    All three lists are mutated in-place; callers own the storage.
     """
     assert len(cam_xz) == 2, "cam_xz must be a two-element [x, z] list"
+    assert len(cam_eye_y) == 1, "cam_eye_y must be a one-element [y] list"
+    assert len(cam_eye_z) == 1, "cam_eye_z must be a one-element [z] list"
+    if wave_index < 0:
+        raise ValueError(f"wave_index must be non-negative, got {wave_index}")
+    if grid_center_x < 0.0:
+        raise ValueError(f"grid_center_x must be non-negative, got {grid_center_x}")
     if in_follow:
         wx, _, wz = player.world_pos
+        target_eye_z = wz - CAMERA_EYE_Z_OFFSET
+        target_eye_y = CAMERA_FOLLOW_EYE[1] * (1.0 + wave_index * CAMERA_WAVE_EYE_Y_SCALE)
         if not prev_in_follow:
-            cam_xz[0], cam_xz[1] = wx, wz              # snap on phase transition
+            # Snap all state on first follow-camera frame — no visible lag.
+            cam_xz[0], cam_xz[1] = wx, wz
+            cam_eye_y[0] = target_eye_y
+            cam_eye_z[0] = target_eye_z
         else:
             alpha = 1.0 - math.exp(-CAMERA_FOLLOW_SMOOTH * dt)
             cam_xz[0] += (wx - cam_xz[0]) * alpha
             cam_xz[1] += (wz - cam_xz[1]) * alpha
-        # Keep target.z above eye.z so the camera always looks in +z.
-        cam_xz[1] = max(CAMERA_FOLLOW_TARGET_Z_MIN, cam_xz[1])
+            alpha_y = 1.0 - math.exp(-CAMERA_EYE_Y_LERP * dt)
+            cam_eye_y[0] += (target_eye_y - cam_eye_y[0]) * alpha_y
+            alpha_z = 1.0 - math.exp(-CAMERA_EYE_Z_LERP * dt)
+            cam_eye_z[0] += (target_eye_z - cam_eye_z[0]) * alpha_z
+        # Keep look-at target ahead of (smoothed) eye Z; prevents backward look.
+        cam_xz[1] = max(cam_eye_z[0] + 0.5, cam_xz[1])
+        follow_eye: tuple[float, float, float] = (grid_center_x, cam_eye_y[0], cam_eye_z[0])
         renderer.rebuild_vp(
-            CAMERA_FOLLOW_EYE, (cam_xz[0], 0.0, cam_xz[1]), CAMERA_FOLLOW_FOV
+            follow_eye, (cam_xz[0], 0.0, cam_xz[1]), CAMERA_FOLLOW_FOV
         )
     else:
         renderer.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
@@ -537,7 +625,7 @@ async def main() -> None:
     font = load_font(28)
     overlay_font = load_font(64)  # large text for title / wave banners
     renderer = Renderer()
-    grid = GridManager()
+    grid = GridManager(width=STAGE_GRID_WIDTHS[0])  # Stage-1 width; grows via set_active_width
     player = Player(grid)
     wave = WaveManager()
     effects = FlashEffects()
@@ -550,9 +638,12 @@ async def main() -> None:
     paused: bool = False
     menu_selected: int = 0  # highlighted item index in the pause menu
     # Smoothed camera look-at target: [x, z] lerped toward player's floor tile.
-    # Initialised to spawn position so the very first frame has the correct view.
+    # cam_eye_y: [y] smoothly interpolates toward the wave-index target each frame.
+    # Both initialised to spawn values so the very first frame has the correct view.
     _wp0 = player.world_pos
     cam_xz: list[float] = [_wp0[0], _wp0[2]]
+    cam_eye_y: list[float] = [CAMERA_FOLLOW_EYE[1]]
+    cam_eye_z: list[float] = [CAMERA_FOLLOW_EYE[2]]  # smoothly tracks player.world_z - offset
     prev_in_follow: bool = game.phase in _FOLLOW_CAMERA_PHASES
 
     # Rule 2 — top-level event loop exception. This is the ONE bounded-by-user
@@ -571,14 +662,14 @@ async def main() -> None:
             game.update(dt, player)
 
         frozen = game.phase in (
-            GamePhase.TITLE, GamePhase.WAVE_RISING,
+            GamePhase.TITLE, GamePhase.STAGE_INTRO, GamePhase.WAVE_RISING,
             GamePhase.GAME_OVER, GamePhase.VICTORY,
             GamePhase.STAGE_CLEAR, GamePhase.MENU,
         )
         if not paused and not frozen:
             held_keys = pygame.key.get_pressed()
             blocked = wave.blocked_tiles()
-            player.update(dt, held_keys, blocked)
+            player.update(dt, held_keys, blocked, max_col=game.active_wave_width - 1)
             tick_fired = wave.update(dt, grid.front_edge_z)
             if tick_fired:
                 # Sample phase BEFORE on_tick: on_tick may transition the
@@ -595,7 +686,10 @@ async def main() -> None:
 
         # --- Camera update ----------------------------------------------------
         in_follow = game.phase in _FOLLOW_CAMERA_PHASES
-        _update_smooth_camera(renderer, player, in_follow, cam_xz, prev_in_follow, dt)
+        _update_smooth_camera(
+            renderer, player, in_follow, cam_xz, cam_eye_y, cam_eye_z,
+            prev_in_follow, dt, game.wave_index, (grid.width - 1) * 0.5,
+        )
         prev_in_follow = in_follow
 
         player_visual = PlayerVisual.CRUSHED if player.is_crushed else PlayerVisual.NORMAL
@@ -603,9 +697,16 @@ async def main() -> None:
         # B3d/B3e: split face list so the player shadow can be drawn between
         # the grid+cube layer and the player layer, preserving correct depth
         # ordering within each layer while placing the shadow on top of tiles.
+        intro_t = (
+            game.intro_elapsed / STAGE_INTRO_DURATION
+            if game.phase == GamePhase.STAGE_INTRO
+            else 0.0
+        )
         face_list: list[ProjectedFace] = []
         face_list.extend(_build_grid_faces(renderer, grid))
-        face_list.extend(_build_cube_faces(renderer, wave, danger))
+        face_list.extend(
+            _build_cube_faces(renderer, wave, danger, intro_t, game.wave_front_z)
+        )
         face_list.extend(_build_marker_faces(renderer, grid))
         player_faces = _build_player_faces(renderer, player, player_visual)
 

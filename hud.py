@@ -35,8 +35,8 @@ HUD_LINE_HEIGHT: int = 26
 HUD_FIRST_LINE_Y: int = 10
 
 # Bottom-anchored hints (controls legend). Placed above the bottom edge so
-# the front-row tiles stay visible. 6 lines of cushion keeps it off the
-# front-row tiles on the 640-tall canvas.
+# the front-row tiles stay visible. Small bottom margin keeps it clear of
+# front-row tiles (canvas height derived from SCREEN_HEIGHT at runtime).
 HUD_HINT_MARGIN_BOTTOM: int = 14
 
 # Surface cache bound: 4 stat labels + 1 hint label.

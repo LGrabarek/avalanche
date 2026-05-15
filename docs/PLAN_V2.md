@@ -1,6 +1,6 @@
 # Avalanche — v2 Plan
 
-## Status: Step 26 approved — Step 27 (camera) is next
+## Status: Step 28 (all waves visible) — AWAITING USER APPROVAL
 
 v2 work lives on the `v2` branch. All changes are localhost-tested and panel-reviewed
 before merging to `master` / deploying to GitHub Pages.
@@ -27,8 +27,8 @@ Step numbering continues from v1 (Steps 1–25).
 | Step | ID  | Description                          | Phase A (Dev)    | Phase B (Test) | Status               |
 |------|-----|--------------------------------------|------------------|----------------|----------------------|
 | 26   | BF1 | Turbo freeze exploit fix             | APPROVED         | APPROVED       | APPROVED 2026-05-06  |
-| 27   | V1  | Player-following camera + zoom       | NOT STARTED      | NOT STARTED    | NOT STARTED          |
-| 28   | V2  | All waves visible + activation system | NOT STARTED      | NOT STARTED    | NOT STARTED          |
+| 27   | V1  | Player-following camera + zoom       | APPROVED         | APPROVED       | APPROVED 2026-05-07  |
+| 28   | V2  | All waves visible + activation system | AWAITING USER    | NOT STARTED    | IN PROGRESS          |
 | 29   | V3  | Stage intro rolling animation        | NOT STARTED      | NOT STARTED    | NOT STARTED          |
 | 30   | V4  | Stages 3–10 (full speed progression) | NOT STARTED      | NOT STARTED    | NOT STARTED          |
 | 31   | V5  | Graphics rework (AA + resolution)    | NOT STARTED      | NOT STARTED    | NOT STARTED          |
