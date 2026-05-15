@@ -40,11 +40,17 @@ class Cube:
     `tick_progress` interpolates 0→1 the cube is visually animating from
     `(grid_x, grid_z)` toward `(grid_x, grid_z - 1)`; the coordinate does
     not update until the tick commits.
+
+    `pending`: when True the cube has been placed for a future wave but has
+    not yet been activated.  Pending cubes do NOT advance on tick, are NOT
+    capturable, and do NOT contribute to `active_cube_count`.  They DO block
+    player movement (blocked_tiles) and are rendered as uniform grey.
     """
 
     grid_x: int
     grid_z: int
     cube_type: CubeType
+    pending: bool = False
 
 
 class WaveManager:
@@ -84,10 +90,22 @@ class WaveManager:
             raise ValueError(f"tick_interval must be positive, got {value}")
         self._tick_interval = value
         # A mid-tumble crush sets interval from 1.2s to 0.15s while
-        # tick_elapsed may be ~0.33s. Without this reset the overshoot
+        # tick_elapsed may be ~0.33s. Without a clamp the overshoot
         # assertion in update() fires on the very next frame.
+        #
+        # We clamp to (value - 1e-6) rather than 0.0 so that the next
+        # update() call fires a tick on the very next frame instead of
+        # restarting the full interval from zero. This prevents the turbo
+        # freeze exploit where rapid F taps keep _tick_elapsed near zero
+        # indefinitely (wave advances never fire while turbo is flicked on
+        # and off). With this fix, pressing F when elapsed > value still
+        # fires a tick on the next frame — the wave cannot be frozen.
+        #
+        # Safety: worst-case overshoot = DT_CLAMP - 1e-6 ≈ 0.1 s, which
+        # is less than the minimum interval (AVALANCHE_TICK_INTERVAL = 0.12 s
+        # or larger). The assert in update() remains satisfied.
         if self._tick_elapsed >= value:
-            self._tick_elapsed = 0.0
+            self._tick_elapsed = max(0.0, value - 1e-6)
 
     @property
     def last_dropped(self) -> list[Cube]:
@@ -110,12 +128,31 @@ class WaveManager:
 
     @property
     def cube_count(self) -> int:
+        """Total cube count including pending cubes."""
         return len(self._cubes)
+
+    @property
+    def active_cube_count(self) -> int:
+        """Count of non-pending (currently advancing) cubes.
+
+        Used by GameManager to detect wave-clear: the wave is finished when
+        this reaches zero regardless of how many pending cubes remain.
+        """
+        return sum(1 for c in self._cubes if not c.pending)
 
     # --- Population ----------------------------------------------------------
 
-    def spawn_cube(self, grid_x: int, grid_z: int, cube_type: CubeType) -> None:
+    def spawn_cube(
+        self,
+        grid_x: int,
+        grid_z: int,
+        cube_type: CubeType,
+        pending: bool = False,
+    ) -> None:
         """Add a single cube at a grid position.
+
+        `pending=True` places the cube as a future-wave placeholder: it will
+        not advance on tick until `activate_pending` flips it.
 
         Raises `ValueError` for off-grid coordinates. Rule-3 invariant: we
         guard the `append` with an explicit cap so a runaway spawner cannot
@@ -128,7 +165,7 @@ class WaveManager:
         assert len(self._cubes) < MAX_ACTIVE_CUBES, (
             f"cube count would exceed cap of {MAX_ACTIVE_CUBES}"
         )
-        self._cubes.append(Cube(grid_x, grid_z, cube_type))
+        self._cubes.append(Cube(grid_x, grid_z, cube_type, pending=pending))
 
     def spawn_debug_row(self) -> None:
         """Step-3A debug loadout: one cube per column at the back row.
@@ -189,49 +226,38 @@ class WaveManager:
     # --- Spatial query + capture hand-off ------------------------------------
 
     def cube_at(self, grid_x: int, grid_z: int) -> Cube | None:
-        """Return the cube resting at `(grid_x, grid_z)` or None.
+        """Return the active (non-pending) cube resting at `(grid_x, grid_z)`.
 
-        "Resting tile" is the cube's committed `(grid_x, grid_z)`; tumble
-        progress toward the next tile does not change the answer. A cube is
-        considered *at* the tile it last committed to via `_advance_tick`.
-        This matches I.Q. capture semantics: a marked tile captures the cube
-        that has arrived on it, not the one animating toward it.
-
-        Invariant (Step 3A): at most one cube per tile. `spawn_debug_row`
-        never double-spawns and advancement shifts every cube in lockstep,
-        so two cubes cannot share a resting tile. Captured here as an
-        assertion so Step 5+ patterns that could violate it fail loudly.
+        Pending cubes are ignored: they have not been activated yet and are
+        never crush/capture targets.  At most one active cube per tile.
         """
         found: Cube | None = None
         for cube in self._cubes:
+            if cube.pending:
+                continue
             if cube.grid_x == grid_x and cube.grid_z == grid_z:
                 assert found is None, (
-                    f"two cubes share resting tile ({grid_x}, {grid_z}) — "
+                    f"two active cubes share resting tile ({grid_x}, {grid_z}) — "
                     "one-cube-per-tile invariant broken"
                 )
                 found = cube
         return found
 
     def capturable_at(self, grid_x: int, grid_z: int) -> Cube | None:
-        """Return the cube visually resting on `(grid_x, grid_z)` if capturable.
+        """Return the active cube visually resting on `(grid_x, grid_z)` if capturable.
 
-        Capture is only valid during the trailing rest phase
-        (`tick_progress >= TUMBLE_REST_FRACTION`). During the rest phase the
-        cube's animation has completed: it sits visually on `cube.grid_z - 1`
-        (one tile ahead of its committed grid position). We therefore match
-        `cube.grid_z == grid_z + 1` — the player marks the tile the cube is
-        *visually* resting on, not its logical committed tile.
-
-        Returns None if the wave is still in the tumble phase, or if no cube
-        is visually resting on `(grid_x, grid_z)`.
+        Pending cubes are never capturable.  Capture is only valid during the
+        trailing rest phase (`tick_progress >= TUMBLE_REST_FRACTION`).
         """
         if self.tick_progress < TUMBLE_REST_FRACTION:
             return None  # Mid-tumble — captures disallowed until cube lands.
         found: Cube | None = None
         for cube in self._cubes:
+            if cube.pending:
+                continue
             if cube.grid_x == grid_x and cube.grid_z == grid_z + 1:
                 assert found is None, (
-                    f"two cubes share visual rest tile ({grid_x}, {grid_z}) "
+                    f"two active cubes share visual rest tile ({grid_x}, {grid_z}) "
                     "— one-cube-per-tile invariant broken"
                 )
                 found = cube
@@ -264,12 +290,11 @@ class WaveManager:
     # --- Tick commit ---------------------------------------------------------
 
     def _advance_tick(self, front_drop_z: int = 0) -> None:
-        """Commit one tick: all cubes advance -Z; cubes off the front drop.
+        """Commit one tick: active cubes advance -Z; pending cubes stay put.
 
-        `front_drop_z`: cubes with `grid_z < front_drop_z` after advancing are
-        captured in `_last_dropped`. When front rows have been voided by penalty
-        deletions, this value is > 0, causing cubes to drop at the new platform
-        edge rather than continuing over empty space.
+        `front_drop_z`: active cubes with `grid_z < front_drop_z` after
+        advancing are captured in `_last_dropped`.  Pending cubes are always
+        retained regardless of z — they are not yet in play.
 
         Dropped cubes are captured in `_last_dropped` so `GameManager.on_tick`
         can count missed normals during the avalanche phase.
@@ -278,12 +303,37 @@ class WaveManager:
             f"front_drop_z {front_drop_z} outside [0, {GRID_DEPTH}]"
         )
         for cube in self._cubes:
-            cube.grid_z -= 1
-        self._last_dropped = [c for c in self._cubes if c.grid_z < front_drop_z]
-        self._cubes = [c for c in self._cubes if c.grid_z >= front_drop_z]
+            if not cube.pending:
+                cube.grid_z -= 1
+        self._last_dropped = [
+            c for c in self._cubes if (not c.pending) and c.grid_z < front_drop_z
+        ]
+        self._cubes = [
+            c for c in self._cubes if c.pending or c.grid_z >= front_drop_z
+        ]
         assert len(self._cubes) <= MAX_ACTIVE_CUBES, (
             "cube count exceeded cap after advance — spawn path broke its precondition"
         )
+
+    # --- Pending activation --------------------------------------------------
+
+    def activate_pending(self, z_min: int, z_max: int) -> None:
+        """Flip pending cubes whose grid_z is in [z_min, z_max] to active.
+
+        Called by `GameManager._activate_wave` at the start of each wave so
+        that wave's pre-placed cubes begin advancing on the next tick.
+        Raises `ValueError` if the z range is invalid.
+        """
+        if not (0 <= z_min <= z_max < GRID_DEPTH):
+            raise ValueError(
+                f"z range [{z_min}, {z_max}] invalid for GRID_DEPTH {GRID_DEPTH}"
+            )
+        activated = 0
+        for cube in self._cubes:
+            if cube.pending and z_min <= cube.grid_z <= z_max:
+                cube.pending = False
+                activated += 1
+        assert activated >= 0, "activate_pending counted negative activations"
 
     # --- Wave lifecycle ------------------------------------------------------
 
@@ -304,30 +354,27 @@ class WaveManager:
     # --- Danger query --------------------------------------------------------
 
     def danger_cubes(self, front_edge_z: int) -> frozenset[tuple[int, int]]:
-        """Return (grid_x, grid_z) for cubes one tick from the platform's front edge.
+        """Return (grid_x, grid_z) for active cubes one tick from the front edge.
 
-        A cube at `front_edge_z + 1` will advance to `front_edge_z` on the
-        next tick and is highlighted by the renderer as a visual danger warning
-        (B3e telegraph).  Returns an empty frozenset when no cubes are in the
-        danger zone or when the wave has no cubes.
+        Pending cubes are excluded: they do not advance and cannot imminently
+        reach the front edge.
         """
         if front_edge_z < 0:
             raise ValueError(f"front_edge_z must be non-negative, got {front_edge_z}")
         return frozenset(
             (cube.grid_x, cube.grid_z)
             for cube in self._cubes
-            if cube.grid_z == front_edge_z + 1
+            if (not cube.pending) and cube.grid_z == front_edge_z + 1
         )
 
     # --- Rendering hand-off --------------------------------------------------
 
-    def iter_cubes(self) -> Iterator[tuple[int, int, float, CubeType]]:
-        """Yield `(grid_x, grid_z, tumble_progress, cube_type)` per cube.
+    def iter_cubes(self) -> Iterator[tuple[int, int, float, CubeType, bool]]:
+        """Yield `(grid_x, grid_z, tumble_progress, cube_type, pending)` per cube.
 
-        All cubes share the same `tumble_progress` (the wave's tick
-        progress); per-cube phase offsets are an intentional non-goal for
-        Step 3A — uniform cadence is easier to eyeball and matches the
-        original I.Q. behavior.
+        Active cubes share the wave's `tumble_progress`.  Pending cubes are
+        always yielded at `progress=0.0` so they render as flat-sitting static
+        cubes rather than animating in sync with the active wave.
 
         **Contract:** callers must not spawn, remove, or mutate cubes while
         consuming this iterator.
@@ -335,4 +382,5 @@ class WaveManager:
         progress = self.tick_progress
         assert 0.0 <= progress <= 1.0, "tick_progress escaped [0, 1] — invariant broken"
         for cube in self._cubes:
-            yield (cube.grid_x, cube.grid_z, progress, cube.cube_type)
+            cube_progress = 0.0 if cube.pending else progress
+            yield (cube.grid_x, cube.grid_z, cube_progress, cube.cube_type, cube.pending)

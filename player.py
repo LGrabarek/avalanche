@@ -11,6 +11,7 @@ Invariant: after every `update()` the player stands on a walkable tile.
 from collections.abc import Sequence
 
 from constants import (
+    GRID_WIDTH,
     MOVE_COOLDOWN,
     MOVEMENT_KEYS,
     PLAYER_SPAWN_X,
@@ -55,6 +56,21 @@ class Player:
     def is_crushed(self) -> bool:
         return self._crushed
 
+    @property
+    def world_pos(self) -> tuple[float, float, float]:
+        """World-space position at the centre of the player's current tile.
+
+        The +0.5 XZ offset centres the camera on the tile interior rather
+        than the tile origin.  y=0.0 (floor level) is intentional: aiming
+        the camera at the floor keeps the player cube in the upper half of
+        the viewport, leaving more vertical screen real estate showing the
+        approaching wave below.  Aiming at y=0.5 (cube midpoint) would
+        vertically centre the player but compress the foreground where
+        tactical decisions happen.  Used by main.py to position the
+        follow camera each frame.
+        """
+        return (self._grid_x + 0.5, 0.0, self._grid_z + 0.5)
+
     def position(self) -> tuple[int, int]:
         """Return the current grid position as `(x, z)`."""
         return (self._grid_x, self._grid_z)
@@ -63,14 +79,20 @@ class Player:
         """Return the player to spawn, uncrush, and zero the movement cooldown.
 
         The grid must be fully intact (all tiles PLATFORM) before calling so
-        the spawn position is guaranteed walkable. Call `grid.reset()` first.
+        the spawn position is guaranteed walkable. Call `grid.resize()` or
+        `grid.reset()` first (resize implicitly resets tiles).
+
+        Spawn X is always the centre of the *current* grid width so the player
+        lands in the middle of the platform regardless of whether the width
+        changed this stage (Step 32: grids are 7, 9, or 11 wide by stage).
         """
-        if not self._grid.is_valid_position(PLAYER_SPAWN_X, PLAYER_SPAWN_Z):
+        spawn_x = self._grid.width // 2
+        if not self._grid.is_valid_position(spawn_x, PLAYER_SPAWN_Z):
             raise ValueError(
-                f"spawn ({PLAYER_SPAWN_X}, {PLAYER_SPAWN_Z}) not walkable — "
-                "reset the grid before resetting the player"
+                f"spawn ({spawn_x}, {PLAYER_SPAWN_Z}) not walkable — "
+                "resize/reset the grid before resetting the player"
             )
-        self._grid_x = PLAYER_SPAWN_X
+        self._grid_x = spawn_x
         self._grid_z = PLAYER_SPAWN_Z
         self._crushed = False
         self._cooldown = 0.0
@@ -90,6 +112,37 @@ class Player:
         """
         self._crushed = False
 
+    def clamp_z_before_wave(self, wave_front_z: int) -> None:
+        """Ensure the player is not inside the new wave stack at stage start.
+
+        If the player's Z ≥ wave_front_z (they advanced into where the new
+        stage's wave 0 is placed), pull them back to the nearest valid tile
+        below wave_front_z. No-op when already safe.  Preserves X (Step 33:
+        lateral position persists across stage boundaries).
+
+        The scan for a valid tile descends from wave_front_z−1 toward z=0 and
+        is bounded by wave_front_z iterations (finite).  In normal play the
+        loop never runs: the first candidate tile (wave_front_z−1 ≈ 47) is
+        always PLATFORM — reaching that depth via penalty-row deletion would
+        require ≈48 misses and triggers GAME_OVER first.
+        """
+        if wave_front_z <= 0:
+            raise ValueError(f"wave_front_z must be positive, got {wave_front_z}")
+        if self._grid_z < wave_front_z:
+            return  # already safe — no-op
+        # Scan downward from wave_front_z-1 for the nearest walkable tile.
+        for target_z in range(wave_front_z - 1, -1, -1):
+            if self._grid.is_valid_position(self._grid_x, target_z):
+                self._grid_z = target_z
+                assert self._grid.is_valid_position(self._grid_x, self._grid_z), (
+                    "player not on walkable tile after Z clamp"
+                )
+                return
+        raise ValueError(
+            f"no walkable tile below wave_front_z={wave_front_z} "
+            f"in column {self._grid_x} — all rows voided"
+        )
+
     # --- Per-frame update -----------------------------------------------------
 
     def update(
@@ -97,6 +150,7 @@ class Player:
         dt: float,
         held_keys: Sequence[bool],
         wave_blocked: frozenset[tuple[int, int]] | None = None,
+        max_col: int = GRID_WIDTH - 1,
     ) -> None:
         """Advance the cooldown and, if a movement key is held, move one tile.
 
@@ -107,9 +161,14 @@ class Player:
         the player cannot enter those tiles (same blocking as void tiles).
         When a Z-axis key (FORWARD/BACKWARD) and an X-axis key (LEFT/RIGHT) are
         held simultaneously, the Z-axis wins (Step 23 perpendicular priority).
+        `max_col` is the inclusive right column boundary for movement; the player
+        cannot step into columns beyond this.  Defaults to GRID_WIDTH-1 (full
+        grid).  Pass `game.active_wave_width - 1` to constrain to wave columns.
         """
         if dt < 0.0:
             raise ValueError(f"dt must be non-negative, got {dt}")
+        if max_col < 0 or max_col >= GRID_WIDTH:
+            raise ValueError(f"max_col {max_col} not in [0, {GRID_WIDTH - 1}]")
         if self._crushed:
             return
         if self._cooldown > 0.0:
@@ -118,7 +177,7 @@ class Player:
         direction = _first_held_direction(held_keys)
         if direction is None:
             return
-        if self.try_move(direction, wave_blocked):
+        if self.try_move(direction, wave_blocked, max_col):
             self._cooldown = MOVE_COOLDOWN
 
     # --- Movement primitive --------------------------------------------------
@@ -127,16 +186,25 @@ class Player:
         self,
         direction: Direction,
         wave_blocked: frozenset[tuple[int, int]] | None = None,
+        max_col: int = GRID_WIDTH - 1,
     ) -> bool:
         """Attempt a single-tile move. Returns True iff the move happened.
 
         Refuses moves that would leave the player off the grid, onto a VOID
-        tile, or into a tile currently occupied by a wave cube.
+        tile, into a tile currently occupied by a wave cube, or beyond `max_col`
+        (the inclusive right boundary of the active wave columns).  Passing
+        `max_col = game.active_wave_width - 1` keeps the player inside the
+        pattern area so they cannot camp on the outer PLATFORM tiles that have
+        no cubes during Stages 1-8 (Step 33).
         """
+        if max_col < 0 or max_col >= GRID_WIDTH:
+            raise ValueError(f"max_col {max_col} not in [0, {GRID_WIDTH - 1}]")
         dx, dz = direction.value
         new_x = self._grid_x + dx
         new_z = self._grid_z + dz
         if not self._grid.is_valid_position(new_x, new_z):
+            return False
+        if new_x > max_col:
             return False
         if wave_blocked is not None and (new_x, new_z) in wave_blocked:
             return False

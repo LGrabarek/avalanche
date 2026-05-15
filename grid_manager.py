@@ -80,6 +80,66 @@ class GridManager:
             "tile storage size wrong after reset"
         )
 
+    def resize(self, new_width: int) -> None:
+        """Change the active grid width and reset all tiles to PLATFORM.
+
+        Clears every tile (hard reset). Use `set_active_width` when tile state
+        (e.g. void rows from penalties) must be preserved across the resize.
+        Callers should pass STAGE_GRID_WIDTHS[stage_index] from constants.
+        """
+        from constants import GRID_WIDTH  # local import avoids circular at module level
+        if not (1 <= new_width <= GRID_WIDTH):
+            raise ValueError(
+                f"new_width {new_width} must be in [1, GRID_WIDTH={GRID_WIDTH}]"
+            )
+        self._width = new_width
+        self._tiles = [TileState.PLATFORM] * (new_width * self._depth)
+        self._marked = None
+        assert len(self._tiles) == self._width * self._depth, (
+            "tile storage size wrong after resize"
+        )
+
+    def set_active_width(self, new_width: int) -> None:
+        """Change the active grid width while preserving existing tile state.
+
+        Unlike `resize()`, which resets all tiles to PLATFORM, this method
+        reformats the tile storage so each row has `new_width` columns:
+        - Existing columns are copied verbatim (VOID rows from penalties stay).
+        - New columns beyond the old width are initialised to PLATFORM.
+        - Columns beyond `new_width` (shrinking) are dropped.
+
+        Called at stage transitions so deleted rows carry forward while the
+        visual grid matches the new stage's wave-pattern width. In normal
+        forward play the grid only grows (7→9→11), so no columns are lost.
+
+        Pre-allocates the full new tile list before copying so no unbounded
+        `append` occurs (Rule 3).
+        """
+        from constants import GRID_WIDTH  # local import avoids circular at module level
+        if not (1 <= new_width <= GRID_WIDTH):
+            raise ValueError(
+                f"new_width {new_width} must be in [1, GRID_WIDTH={GRID_WIDTH}]"
+            )
+        if new_width == self._width:
+            return  # no-op: width unchanged
+        old_width = self._width
+        copy_cols = min(old_width, new_width)
+        new_tiles: list[TileState] = [TileState.PLATFORM] * (new_width * self._depth)
+        for z in range(self._depth):
+            old_start = z * old_width
+            new_start = z * new_width
+            for x in range(copy_cols):
+                new_tiles[new_start + x] = self._tiles[old_start + x]
+            # Columns ≥ old_width already PLATFORM from pre-allocation.
+        self._tiles = new_tiles
+        self._width = new_width
+        # Clear mark if it fell outside the new width.
+        if self._marked is not None and self._marked[0] >= new_width:
+            self._marked = None
+        assert len(self._tiles) == self._width * self._depth, (
+            "tile storage size wrong after set_active_width"
+        )
+
     def in_bounds(self, x: int, z: int) -> bool:
         """Coordinate-range check. Does not consult tile state."""
         return 0 <= x < self._width and 0 <= z < self._depth

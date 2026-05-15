@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 6 uv run python main.py)",
+      "Bash(timeout 5 uv run python main.py)",
+      "Bash(uv run:*)",
+      "Bash(python -c \"import pygame; pygame.init\\(\\); k=pygame.key.get_pressed\\(\\); print\\('len:', len\\(k\\)\\); print\\('K_LEFT:', pygame.K_LEFT, 'K_RIGHT:', pygame.K_RIGHT, 'K_UP:', pygame.K_UP, 'K_DOWN:', pygame.K_DOWN\\); print\\('K_a:', pygame.K_a, 'K_d:', pygame.K_d, 'K_w:', pygame.K_w, 'K_s:', pygame.K_s\\); print\\('K_LEFT in range?', pygame.K_LEFT < len\\(k\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import pygame; pygame.init\\(\\); k=pygame.key.get_pressed\\(\\); print\\('len:', len\\(k\\)\\); print\\('K_LEFT:', pygame.K_LEFT, 'in-range?', pygame.K_LEFT < len\\(k\\)\\); print\\('K_a:', pygame.K_a, 'in-range?', pygame.K_a < len\\(k\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import pygame; pygame.init\\(\\); k=pygame.key.get_pressed\\(\\); print\\(type\\(k\\).__name__\\); print\\('getitem on K_LEFT:', k[pygame.K_LEFT]\\); print\\('getitem on scancode 80:', k[80]\\)\")"
+    ]
+  }
+}

@@ -150,12 +150,30 @@ class Renderer:
         self.screen_height: int = screen_height
         self.half_w: float = screen_width * 0.5
         self.half_h: float = screen_height * 0.5
+        # Stored so rebuild_vp() can re-use it without recomputing each call.
+        self._aspect: float = screen_width / screen_height
+        # Build the initial VP matrix (overview camera); gameplay calls
+        # rebuild_vp() every frame to track the player.
+        self.vp_matrix: Mat4 = [0.0] * 16   # populated immediately below
+        self.rebuild_vp(CAMERA_POS, CAMERA_TARGET)
 
-        # Build combined view-projection matrix (computed once — camera is fixed).
-        aspect = screen_width / screen_height
-        view = _mat4_look_at(CAMERA_POS, CAMERA_TARGET)
-        proj = _mat4_perspective(CAMERA_FOV, aspect, NEAR_PLANE, FAR_PLANE)
-        self.vp_matrix: Mat4 = _mat4_mul(proj, view)
+    def rebuild_vp(
+        self,
+        eye: Vec3,
+        target: Vec3,
+        fov: float = CAMERA_FOV,
+    ) -> None:
+        """Rebuild the combined view-projection matrix for a new camera pose.
+
+        Called once at startup (via __init__) and every frame when the camera
+        follows the player.  Pass CAMERA_FOLLOW_FOV for the follow pose;
+        the default CAMERA_FOV is used for the title / end-screen overview.
+        """
+        if eye == target:
+            raise ValueError(f"eye {eye} and target {target} must differ")
+        view = _mat4_look_at(eye, target)
+        proj = _mat4_perspective(fov, self._aspect, NEAR_PLANE, FAR_PLANE)
+        self.vp_matrix = _mat4_mul(proj, view)
 
     def project_vertex(self, x: float, y: float, z: float) -> tuple[float, float, float] | None:
         """Project a world-space point to screen coords.
@@ -257,12 +275,22 @@ class Renderer:
         # as `key=` arguments to sort-like built-ins.
         face_list.sort(key=lambda f: f[1], reverse=True)
 
-        # pygame.draw.polygon returns a Rect bounding the drawn pixels. We do
-        # not use dirty-rect optimization (full-clear every frame), so the
-        # returned rects are not meaningful to us and are discarded to `_`.
+        # pygame.draw.polygon / aalines return a Rect bounding the drawn pixels.
+        # Full-clear every frame means dirty-rect tracking adds no benefit; all
+        # returned rects are discarded to `_`.
+        #
+        # Step 31: cube edges are drawn with pygame.draw.aalines (anti-aliased,
+        # always 1 screen-pixel wide) instead of the previous polygon-outline
+        # draw.  For edge_width > 1 (FORBIDDEN cubes) a second aalines pass is
+        # drawn with every point shifted 1 px to the right, giving a visually
+        # thicker ~2 px outline without requiring gfxdraw or a surface copy.
         for projected_face in face_list:
             screen_points, _depth, fill_color, edge_color, edge_width = projected_face
             int_points = [(int(x), int(y)) for x, y in screen_points]
             _ = pygame.draw.polygon(screen, fill_color, int_points)
-            if edge_color is not None and edge_width > 0:
-                _ = pygame.draw.polygon(screen, edge_color, int_points, edge_width)
+            if edge_color is not None:
+                _ = pygame.draw.aalines(screen, edge_color, True, int_points)
+                if edge_width > 1:
+                    # Second offset pass — 1 px right — simulates a thick outline.
+                    offset_pts = [(x + 1, y) for x, y in int_points]
+                    _ = pygame.draw.aalines(screen, edge_color, True, offset_pts)

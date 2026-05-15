@@ -54,11 +54,14 @@ Step 10B additions:
 
 Step 10A additions:
   * `TITLE` phase: `start_first_wave` now enters TITLE instead of spawning
-    immediately. Player presses any key → `on_title_advance()` → WAVE_RISING.
+    immediately. Player presses any key → `on_title_advance()` → STAGE_INTRO.
+  * `STAGE_INTRO` phase (Step 29): 2.8-second rolling-wave animation before wave 0.
+    Replaces the initial WAVE_RISING at stage start; `update` fires `_begin_wave`
+    when the timer expires. WAVE_RISING is still used for waves 2-4 within a stage.
   * `WAVE_RISING` phase: 2-second between-wave timer. `update(dt, player)` counts
     down; when it reaches zero `_spawn_wave` fires. `perfect_display` property
     signals main.py whether to show the PERFECT! banner during this window.
-  * `on_title_advance()` — TITLE → WAVE_RISING; sets the 2 s timer.
+  * `on_title_advance()` — TITLE → STAGE_INTRO.
   * `update(dt, player)` — per-frame countdown; triggers wave spawn on expiry.
   * `perfect_display` property — True during WAVE_RISING after a Perfect wave.
   * `_on_wave_cleared` now uncrushs the player and clears the mark immediately
@@ -102,15 +105,19 @@ from constants import (
     CRUSH_TUMBLE_THRESHOLD,
     CUBE_TYPES,
     END_SCREEN_HOLD,
+    GRID_DEPTH,
     IQ_DIFFICULTY_MULTIPLIERS,
     IQ_PERCENTAGE_MULTIPLIERS,
     PENALTY_THRESHOLD,
     PERFECT_BONUS_MAX,
     SCORE_ROW_SURVIVAL,
     STAGE_AVALANCHE_TICK_INTERVALS,
+    STAGE_GRID_WIDTHS,
+    STAGE_INTRO_DURATION,
     STAGE_TICK_INTERVALS,
     TICK_SPEED_DECAY,
     TURBO_TICK_INTERVAL,
+    WAVE_GAP_ROWS,
     WAVE_RISING_DURATION,
     CubeBehavior,
     CubeType,
@@ -170,6 +177,9 @@ class GameManager:
         self._waves: tuple[WaveData, ...] = ()
         self._wave_index: int = 0
         self._stage_index: int = 0       # 0-based index into STAGES master table.
+        # z_back coordinate for each wave's back row — populated by
+        # _spawn_all_waves_pending().  Index i matches self._waves[i].
+        self._wave_z_starts: list[int] = []
         self._iq_score: int = 0
         # Per-wave Perfect tracking — reset by _spawn_wave() at each wave start.
         self._forbidden_captured: bool = False   # Any FORBIDDEN captured this wave?
@@ -179,6 +189,9 @@ class GameManager:
         # Between-wave display state — set by _on_wave_cleared, reset by _spawn_wave.
         self._wave_rising_timer: float = 0.0     # Countdown for WAVE_RISING phase.
         self._perfect_display: bool = False      # Show PERFECT! banner in WAVE_RISING.
+        # Stage-intro animation elapsed time.  Counts from 0 to STAGE_INTRO_DURATION
+        # while phase == STAGE_INTRO; reset to 0.0 each time STAGE_INTRO is entered.
+        self._intro_elapsed: float = 0.0
         # Pause menu state — _pre_menu_phase stores the phase to restore on close.
         self._pre_menu_phase: GamePhase = GamePhase.WAVE_ACTIVE
         # End-screen hold timer — counts up from 0 on entry to GAME_OVER/VICTORY.
@@ -233,6 +246,28 @@ class GameManager:
         return self._perfect_display
 
     @property
+    def intro_elapsed(self) -> float:
+        """Seconds elapsed since entering STAGE_INTRO (0.0 outside that phase)."""
+        return self._intro_elapsed
+
+    @property
+    def wave_front_z(self) -> int:
+        """Z coordinate of the front row of wave 0 — the row closest to the player.
+
+        Used by `main._intro_y_bias` to clamp the rolling-wave animation so
+        the front of wave 0 never lifts off the floor.  Valid once
+        `start_first_wave` (which calls `_spawn_all_waves_pending`) has set
+        `_wave_z_starts`.
+        """
+        assert len(self._wave_z_starts) > 0, (
+            "wave_front_z called before start_first_wave"
+        )
+        assert len(self._waves) > 0, (
+            "wave_front_z called before start_first_wave"
+        )
+        return self._wave_z_starts[0] - self._waves[0].row_count + 1
+
+    @property
     def end_hold_ready(self) -> bool:
         """True once the end-screen hold has elapsed (GAME_OVER / VICTORY).
 
@@ -240,6 +275,20 @@ class GameManager:
         skips when the end condition fires mid-keypress.
         """
         return self._end_hold_elapsed >= END_SCREEN_HOLD
+
+    @property
+    def active_wave_width(self) -> int:
+        """Number of columns used by wave cubes in the current stage (1-based).
+
+        Stages 1-4 use 7-wide patterns; 5-8 use 9-wide; 9-10 use 11-wide
+        (mirrors STAGE_GRID_WIDTHS in constants.py). The grid is always
+        GRID_WIDTH=11 wide (Step 33), but movement is clamped to this width
+        so the player cannot safely camp in the outer columns that have no cubes.
+        """
+        idx = min(self._stage_index, len(STAGE_GRID_WIDTHS) - 1)
+        result = STAGE_GRID_WIDTHS[idx]
+        assert 1 <= result <= 11, f"active_wave_width {result} out of [1, 11]"
+        return result
 
     # --- Stage-indexed tick interval helpers ---------------------------------
 
@@ -275,11 +324,18 @@ class GameManager:
         """
         if dt < 0.0:
             raise ValueError(f"dt must be non-negative, got {dt}")
-        if self._phase == GamePhase.WAVE_RISING:
+        if self._phase == GamePhase.STAGE_INTRO:
+            self._intro_elapsed = min(self._intro_elapsed + dt, STAGE_INTRO_DURATION)
+            assert 0.0 <= self._intro_elapsed <= STAGE_INTRO_DURATION, (
+                "intro_elapsed out of [0, STAGE_INTRO_DURATION] bounds"
+            )
+            if self._intro_elapsed >= STAGE_INTRO_DURATION:
+                self._begin_wave(player)
+        elif self._phase == GamePhase.WAVE_RISING:
             self._wave_rising_timer = max(0.0, self._wave_rising_timer - dt)
             assert self._wave_rising_timer >= 0.0, "wave rising timer went negative"
             if self._wave_rising_timer == 0.0:
-                self._spawn_wave(player)
+                self._begin_wave(player)
         elif self._phase in (
             GamePhase.GAME_OVER, GamePhase.VICTORY, GamePhase.STAGE_CLEAR,
         ):
@@ -321,14 +377,14 @@ class GameManager:
                 self._trigger_avalanche(player, wave)
             else:
                 self._count_wave_misses(player, wave)
-                # When all cubes are gone advance to the next wave immediately.
-                # `_count_wave_misses` may set GAME_OVER (row deletion under player);
-                # guard before calling _on_wave_cleared.
-                if self._phase != GamePhase.GAME_OVER and wave.cube_count == 0:  # type: ignore[comparison-overlap]  # _count_wave_misses may mutate _phase to GAME_OVER
+                # When all active cubes are gone advance to the next wave.
+                # `_count_wave_misses` may set GAME_OVER; guard before calling
+                # _on_wave_cleared. pending cubes from future waves are ignored.
+                if self._phase != GamePhase.GAME_OVER and wave.active_cube_count == 0:  # type: ignore[comparison-overlap]  # _count_wave_misses may mutate _phase to GAME_OVER
                     self._on_wave_cleared(player)
         elif self._phase == GamePhase.AVALANCHE:
             self._count_avalanche_misses(wave)
-            if wave.cube_count == 0:
+            if wave.active_cube_count == 0:
                 self._apply_avalanche_penalties(player)
                 if self._phase != GamePhase.GAME_OVER:  # type: ignore[comparison-overlap]  # _apply_avalanche_penalties may mutate _phase to GAME_OVER
                     self._on_wave_cleared(player)
@@ -474,18 +530,20 @@ class GameManager:
     # --- Phase transitions (player-initiated) ---------------------------------
 
     def on_title_advance(self) -> None:
-        """Advance from TITLE to WAVE_RISING, starting the between-wave timer.
+        """Advance from TITLE to STAGE_INTRO, starting the rolling-wave animation.
 
         Called from main.py on any KEYDOWN while in TITLE. No-op if not in
         TITLE so stray key-events during other phases are harmless.
+        STAGE_INTRO replaces the initial WAVE_RISING pause: the animation acts
+        as the "get ready" cue, ending by calling _begin_wave automatically.
         """
         if self._phase != GamePhase.TITLE:
             return
         assert self._wave_index == 0, (
             f"expected wave_index 0 on title advance, got {self._wave_index}"
         )
-        self._wave_rising_timer = WAVE_RISING_DURATION
-        self._phase = GamePhase.WAVE_RISING
+        self._intro_elapsed = 0.0
+        self._phase = GamePhase.STAGE_INTRO
 
     # --- Private helpers -----------------------------------------------------
 
@@ -674,17 +732,17 @@ class GameManager:
             f"{CubeType(cube.cube_type).name} — add a dispatch branch"
         )
 
-    # --- Wave progression (Step 9A) ------------------------------------------
+    # --- Wave progression (Step 9A / Step 28) --------------------------------
 
     def start_first_wave(
         self, player: Player, waves: tuple[WaveData, ...]
     ) -> None:
-        """Initialize the wave sequence and enter the TITLE phase.
+        """Initialize the wave sequence, spawn all waves as pending, enter TITLE.
 
-        Must be called once from `main.py` after all subsystems are constructed
-        and before the game loop starts. The actual wave spawn is deferred until
-        the player presses a key (on_title_advance → WAVE_RISING → update →
-        _spawn_wave). Raises `ValueError` if `waves` is empty.
+        All stage waves are placed immediately as static pending (grey) cubes
+        so they are visible on the title screen.  The actual wave advance is
+        deferred until the player presses a key (on_title_advance → WAVE_RISING
+        → update → _begin_wave).  Raises `ValueError` if `waves` is empty.
         """
         if not waves:
             raise ValueError("waves sequence must not be empty")
@@ -692,6 +750,7 @@ class GameManager:
         self._waves = waves
         self._wave_index = 0
         self._phase = GamePhase.TITLE
+        self._spawn_all_waves_pending(player)
 
     def on_restart_key(self, player: Player) -> None:
         """Reset all game state and return to TITLE on any key during GAME_OVER/VICTORY.
@@ -721,12 +780,14 @@ class GameManager:
         self._on_stage_complete(player)
 
     def _on_stage_complete(self, player: Player) -> None:
-        """Transition into the next stage: reset subsystems, enter WAVE_RISING.
+        """Transition into the next stage: reset subsystems, enter STAGE_INTRO.
 
         Increments _stage_index, resets the grid/wave/effects/player for a
         fresh board, clears all per-wave tracking fields, and sets up the new
         stage's wave sequence. Score carries over (not reset) so the cumulative
         total is visible in the VICTORY screen at the end of the final stage.
+        STAGE_INTRO replaces the initial WAVE_RISING pause; the rolling-wave
+        animation ends by automatically calling _begin_wave for wave 0.
         """
         if self._audio is not None:
             self._audio.play_wave_clear()   # brief fanfare as the new stage begins
@@ -734,12 +795,14 @@ class GameManager:
         assert self._stage_index < len(STAGES), (
             f"stage_index {self._stage_index} out of range [0, {len(STAGES)})"
         )
-        # Reset the board for the new stage.
-        self._grid.reset()
+        # Step 33: grid tile state (row deletions) and player X persist across
+        # stage boundaries. Resize the grid to match the new stage's wave-pattern
+        # width while preserving void rows (set_active_width, not resize/reset).
+        self._grid.set_active_width(STAGE_GRID_WIDTHS[self._stage_index])
         self._wave.reset_for_new_wave()
         self._wave.tick_interval = self._cur_tick_interval  # arm new stage's speed
         self._effects.reset()
-        player.reset()
+        player.uncrush()
         # Reset per-wave and per-stage tracking; score is cumulative.
         self._wave_index = 0
         self._wave_penalty = 0
@@ -750,10 +813,15 @@ class GameManager:
         self._wave_total_misses = 0
         self._perfect_display = False
         self._end_hold_elapsed = 0.0
-        # Arm the new stage's wave list and start the between-wave countdown.
+        # Arm the new stage's wave list, spawn all waves as pending, start intro.
         self._waves = STAGES[self._stage_index]
-        self._wave_rising_timer = WAVE_RISING_DURATION
-        self._phase = GamePhase.WAVE_RISING
+        self._spawn_all_waves_pending(player)
+        # Safety clamp (Step 33 BLOCKER fix): if the player advanced deep into
+        # Stage N's wave stack they could persist inside Stage N+1's wave 0.
+        # Clamp Z to just below the new wave front; X is preserved.
+        player.clamp_z_before_wave(self.wave_front_z)
+        self._intro_elapsed = 0.0
+        self._phase = GamePhase.STAGE_INTRO
 
     def _do_restart(self, player: Player) -> None:
         """Full reset sequence shared by on_restart_key and on_menu_select (Restart).
@@ -768,7 +836,8 @@ class GameManager:
         also calls it when the timer expires; the double call is intentional.
         """
         assert len(STAGES) > 0, "STAGES must not be empty"
-        self._grid.reset()               # must come before player.reset()
+        self._grid.resize(STAGE_GRID_WIDTHS[0])   # full reset to Stage-1 width
+        # grid.resize() must precede player.reset() so the spawn tile is valid.
         self._wave.reset_for_new_wave()  # clear stale cubes before TITLE renders
         self._effects.reset()            # clear flashes and shake
         player.reset()                   # teleport back to spawn
@@ -789,30 +858,124 @@ class GameManager:
         self._waves = ()
         self._wave_index = 0
         self._stage_index = 0
+        self._wave_z_starts = []
         self._forbidden_captured = False
         self._had_avalanche = False
         self._player_steps = 0
         self._wave_total_misses = 0
         self._wave_rising_timer = 0.0
         self._perfect_display = False
+        self._intro_elapsed = 0.0
         self._pre_menu_phase = GamePhase.WAVE_ACTIVE
         self._end_hold_elapsed = 0.0
         assert self._score == 0, "score not zeroed after _reset_state"
         assert self._wave_index == 0, "wave_index not zeroed after _reset_state"
         assert self._stage_index == 0, "stage_index not zeroed after _reset_state"
 
-    def _spawn_wave(self, player: Player) -> None:
-        """Spawn the current wave index's cubes and reset all per-wave state.
+    def _compute_wave_z_starts(self) -> list[int]:
+        """Return z_back for each wave — the z of each wave's back-most row.
 
-        Resets penalty counters, perfect-tracking flags, and player-step counter.
-        Uncrushs the player (safe even if not currently crushed). Clears any
-        leftover grid mark. Spawns cubes with a 50% random mirror flip.
+        Waves are packed *backward* from z=GRID_DEPTH-1 so the entire stack
+        sits against the far wall of the play area (Step 33).  Wave 0 is the
+        first to activate (closest to the player); wave n-1 is furthest back.
+
+          z_back[n-1] = GRID_DEPTH − 1
+          z_front[i]  = z_back[i] − _waves[i].row_count + 1
+          z_back[i-1] = z_front[i] − WAVE_GAP_ROWS − 1
+
+        Example (Stage 1, 2-row waves, GRID_DEPTH=60, WAVE_GAP_ROWS=0):
+          z_back[3] = 59  →  z_front[3] = 58
+          z_back[2] = 57  →  z_front[2] = 56
+          z_back[1] = 55  →  z_front[1] = 54
+          z_back[0] = 53  →  z_front[0] = 52  (31 clear tiles ahead of player)
+
+        Example (Stage 10, 7-row waves, GRID_DEPTH=60, WAVE_GAP_ROWS=0):
+          z_back[3] = 59  →  z_front[3] = 53
+          z_back[2] = 52  →  z_front[2] = 46
+          z_back[1] = 45  →  z_front[1] = 39
+          z_back[0] = 38  →  z_front[0] = 32  (11 clear tiles ahead of player)
         """
-        assert len(self._waves) > 0, "_spawn_wave called before waves were set"
+        if not self._waves:
+            raise ValueError("_compute_wave_z_starts called with empty waves")
+        n = len(self._waves)
+        z_starts: list[int] = [0] * n
+        z_back = GRID_DEPTH - 1
+        # Fill z_starts from the back (wave n-1) to the front (wave 0).
+        for i in range(n - 1, -1, -1):
+            z_front = z_back - self._waves[i].row_count + 1
+            if z_front < 0:
+                raise ValueError(
+                    f"wave {i} front row z={z_front} < 0 — increase GRID_DEPTH "
+                    f"or reduce wave count / row count"
+                )
+            z_starts[i] = z_back
+            z_back = z_front - WAVE_GAP_ROWS - 1
+        assert len(z_starts) == len(self._waves), (
+            "z_starts length must equal wave count"
+        )
+        return z_starts
+
+    def _spawn_all_waves_pending(self, player: Player) -> None:
+        """Spawn every wave in the current stage as static pending cubes.
+
+        Called at stage start (from start_first_wave and _on_stage_complete)
+        so all wave patterns are visible on-screen immediately.  Each cube is
+        pending=True: it does not advance until _activate_wave flips it.
+
+        The wave manager must have been reset (reset_for_new_wave) by the
+        caller before this method runs so there are no stale cubes.
+        """
+        assert len(self._waves) > 0, "_spawn_all_waves_pending called with empty waves"
+        assert self._wave.active_cube_count == 0, (
+            "_spawn_all_waves_pending called with active cubes still present — "
+            "call wave.reset_for_new_wave() first"
+        )
+        self._wave_z_starts = self._compute_wave_z_starts()
+        assert len(self._wave_z_starts) == len(self._waves), (
+            "z_starts length mismatch after _compute_wave_z_starts"
+        )
+        for wave_idx, wave_data in enumerate(self._waves):
+            z_start = self._wave_z_starts[wave_idx]
+            # Per-wave mirror decision keeps variety across multiple waves.
+            mirror = random.random() < 0.5
+            positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+            for gx, gz, cube_type in positions:
+                self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert self._wave.cube_count > 0, (
+            "no cubes placed by _spawn_all_waves_pending — wave list may be empty"
+        )
+
+    def _activate_wave(self, wave_idx: int) -> None:
+        """Flip the pending flag off for all cubes belonging to wave_idx.
+
+        Uses the z range stored in _wave_z_starts to identify which cubes to
+        activate.  After this call those cubes will advance on the next tick.
+        """
+        if not (0 <= wave_idx < len(self._wave_z_starts)):
+            raise ValueError(
+                f"wave_idx {wave_idx} out of range [0, {len(self._wave_z_starts)})"
+            )
+        z_back = self._wave_z_starts[wave_idx]
+        row_count = self._waves[wave_idx].row_count
+        z_front = z_back - row_count + 1
+        self._wave.activate_pending(z_front, z_back)
+
+    def _begin_wave(self, player: Player) -> None:
+        """Begin the current wave from pre-placed pending cubes.
+
+        Unlike the old _spawn_wave, this method does NOT create new cubes.
+        All cubes were already spawned as pending by _spawn_all_waves_pending.
+        This method only:
+          1. Resets per-wave tracking fields.
+          2. Sets the stage-correct tick interval.
+          3. Clears the grid mark and uncrushes the player.
+          4. Activates this wave's pending cubes via _activate_wave.
+          5. Transitions to WAVE_ACTIVE.
+        """
+        assert len(self._waves) > 0, "_begin_wave called before waves were set"
         assert 0 <= self._wave_index < len(self._waves), (
             f"wave_index {self._wave_index} out of range [0, {len(self._waves)})"
         )
-        wave_data = self._waves[self._wave_index]
         # Reset per-wave counters and flags.
         self._forbidden_captured = False
         self._had_avalanche = False
@@ -821,18 +984,15 @@ class GameManager:
         self._wave_penalty = 0
         self._avalanche_penalty = 0
         self._perfect_display = False
-        # Restore player and subsystem state for the new wave.
+        # Restore player and set stage-correct tick speed.
         player.uncrush()
-        self._wave.reset_for_new_wave()
-        self._wave.tick_interval = self._cur_tick_interval  # stage-correct speed
+        self._wave.tick_interval = self._cur_tick_interval
         self._grid.clear_mark()
-        # Spawn cubes — 50% mirror-flip doubles effective pattern variety.
-        mirror = random.random() < 0.5
-        positions = wave_data.spawn_positions(mirror=mirror)
-        for gx, gz, cube_type in positions:
-            self._wave.spawn_cube(gx, gz, cube_type)
-        assert self._wave.cube_count > 0, (
-            f"wave {self._wave_index} spawned no cubes — wave_data may be empty"
+        # Activate this wave's pre-placed cubes.
+        self._activate_wave(self._wave_index)
+        assert self._wave.active_cube_count > 0, (
+            f"wave {self._wave_index} has no active cubes after activation — "
+            "_spawn_all_waves_pending may not have placed cubes for this wave"
         )
         self._phase = GamePhase.WAVE_ACTIVE
 
