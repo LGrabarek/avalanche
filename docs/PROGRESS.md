@@ -1419,10 +1419,14 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 
 | Step | ID  | Description                            | Status      |
 |------|-----|----------------------------------------|-------------|
-| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37) | NOT STARTED |
-| 35   | F2  | Wave 1 variety for Stages 4–10        | NOT STARTED |
-| 36   | F3  | Difficulty curve audit                 | NOT STARTED |
-| 37   | H1  | High score table (localStorage)        | NOT STARTED |
-| 38   | U1  | Stage Clear stats screen               | NOT STARTED |
+| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | NOT STARTED |
+| 35   | F2  | Wave variety — distinct openers, Stages 4–10 | NOT STARTED |
+| 36   | F3  | Difficulty curve audit                        | NOT STARTED |
+| 37   | H1  | High score table (localStorage bridge)        | NOT STARTED |
+| 38   | U1  | Stage Clear stats screen                      | NOT STARTED |
+| 39   | U2  | Row gained/lost HUD counter                   | NOT STARTED |
+| 40   | V1  | Platform depth (grid table walls)             | NOT STARTED |
+| 41   | V2  | Animated player character                     | NOT STARTED |
+| 42   | R1  | Wave arrangement variants + seeded leaderboard| NOT STARTED |
 
 **Next step: Step 34 (opening feel) when ready to implement.**
