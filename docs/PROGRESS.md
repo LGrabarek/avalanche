@@ -1420,7 +1420,7 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 | Step | ID  | Description                            | Status      |
 |------|-----|----------------------------------------|-------------|
 | 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | APPROVED 2026-05-17 |
-| 35   | F2  | Wave variety — distinct openers, Stages 4–10 | AWAITING USER |
+| 35   | F2  | Wave variety — distinct openers, Stages 1–10 | AWAITING USER |
 | 36   | F3  | Difficulty curve audit                        | NOT STARTED |
 | 37   | H1  | High score table (localStorage bridge)        | NOT STARTED |
 | 38   | U1  | Stage Clear stats screen                      | NOT STARTED |
@@ -1435,6 +1435,28 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 
 ---
 
+### Session — 2026-05-17 — Step 35 (F2) expanded (Stages 2, 3, 7)
+
+User requested: "These need to be available earlier on with stage 1 so the first 4
+stages are varied too." Three additional W1 redesigns in `wave_data.py`:
+
+- Stage 2: A@col2 only (no F) — ideal 39 (was 37). Clean A introduction.
+- Stage 3: F@col0 & col6 (edge F) + A@col3 (centre) — ideal 35 (was 36).
+  Blast safety: |3-0|=3 ✓, |3-6|=3 ✓.
+- Stage 7: F@col1 & col7 (flanking F, no A shortcut) — ideal 86 (was 90 all-Normal).
+  Resolves Stage 1/7 duplicate signature conflict.
+
+All-stage W1 signatures now unique:
+  S1=all-Normal; S2=clean A; S3=edge F; S4=asymm A+gap; S5=dual A;
+  S6=centre F flanked by A; S7=F flanking no A; S8=corner A;
+  S9=near-edge F+centre A; S10=triple A chain.
+
+`uv run ruff check .` + `uv run mypy --strict .` — 14 files, all clean.
+`docs/STEP35_REVIEW.md` updated with revised table, new test cases 9–11, and
+revised Stage 7 note. Awaiting user approval.
+
+---
+
 ### Session — 2026-05-17 — Step 35 (F2) implemented
 
 Step 35 is a wave_data.py-only change. Seven Stage W1 openers redesigned:
@@ -1442,7 +1464,7 @@ Step 35 is a wave_data.py-only change. Seven Stage W1 openers redesigned:
 - Stage 4: A@col1 (left-skewed), gap at col3 — ideal 51 (was 53, pattern redesigned)
 - Stage 5: Dual A@col2 & col6 — ideal 66 (was 69)
 - Stage 6: A@col1 + A@col7 flanking F@col4 (centre trap) — ideal 82 (was 87)
-- Stage 7: All-Normal 5 rows — ideal 90 (was 83, pattern redesigned; old value invalid)
+- Stage 7: All-Normal 5 rows — ideal 90 (was 83, pattern redesigned; later revised)
 - Stage 8: A@col0 (far-left corner) — ideal 107 (was 105)
 - Stage 9: F@col1 & col9 + A@col5 (near-edge traps) — ideal 125 (was 129)
 - Stage 10: Triple A@col2,col5,col8 (full-width chain) — ideal 145 (was 151)

@@ -216,25 +216,26 @@ STAGE_1_WAVES: tuple[WaveData, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Four Stage-2 wave patterns — harder layouts, more FORBIDDEN, 3-row waves
+# Four Stage-2 wave patterns — 3-row waves, clean A intro then F escalation
 # ---------------------------------------------------------------------------
-# Stage 2 ramps up density and ADVANTAGE/FORBIDDEN interplay.  Each wave
-# has 3 rows (back, middle, front).  Ideal-step counts assume efficient
-# blast chaining on the back row; the two dense front rows are captured
-# individually.  Adding one 7-NORMAL row costs 7×2 = 14 extra steps vs
-# the equivalent 2-row Stage-1 version.
+# Stage 2 ramps up density with a clean A introduction (W1), then escalates
+# ADVANTAGE/FORBIDDEN interplay from W2 onward.  Each wave has 3 rows (back,
+# middle, front).  Ideal-step counts assume efficient blast chaining on the
+# back row; the two dense front rows are captured individually.  Adding one
+# 7-NORMAL row costs 7×2 = 14 extra steps vs the equivalent 2-row Stage-1 version.
 # ---------------------------------------------------------------------------
 
-# Wave S2-1 — FORBIDDEN introduced early.  ADVANTAGE at col 2 (back row)
-# with FORBIDDEN at col 5 (distance 3 — safe from the ±1 blast).
-# Blast A@col2: col1+col2+col3 = 3 steps.  Remaining back N: col0,col4,col6 = 3×2.
-# Optimal: 3 (ADV+detonate) + 3×2 (remaining back N) + 7×2 (mid) + 7×2 (front) = 37.
+# Wave S2-1 — Clean A introduction.  ADVANTAGE at col 2 (off-centre); no
+# FORBIDDEN.  Teaches that blasting is a useful option without the hazard of
+# a FORBIDDEN cube.  The asymmetric A position differentiates this from Stage 1.
+# Blast A@col2: col1+col2+col3 = 3 steps.  Remaining back N: col0,col4,col5,col6 = 4×2.
+# Optimal: 3 (ADV+detonate) + 4×2 (remaining back N) + 7×2 (mid) + 7×2 (front) = 39.
 _S2W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _A, _N, _N, _F, _N),   # row 0 (back)   — 4 NORMAL + 1 ADVANTAGE + 1 FORBIDDEN
+    (_N, _N, _A, _N, _N, _N, _N),   # row 0 (back)   — 6 NORMAL + 1 ADVANTAGE
     (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7 NORMAL
     (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7 NORMAL
 )
-_S2W1_IDEAL: int = 37
+_S2W1_IDEAL: int = 39
 
 # Wave S2-2 — Two ADVANTAGE flanking a centre FORBIDDEN (back row); two
 # dense rows follow.  Both ADV blasts sweep the outer halves of the back row.
@@ -284,28 +285,29 @@ STAGE_2_WAVES: tuple[WaveData, ...] = (
 # ---------------------------------------------------------------------------
 # Stage 3 — 4 waves × 3 rows × 7 cols  (same packing as Stage 2)
 # ---------------------------------------------------------------------------
-# Same grid width and row count as Stage 2 but harder patterns: more FORBIDDEN
-# density and tighter ADVANTAGE chains.  Stage-2 Wave-4's back row pattern
-# (corner ADV + inner FORBIDDEN) opens as the Stage-3 intro wave.
+# Same grid width and row count as Stage 2 but harder patterns.  W1 introduces
+# FORBIDDEN at the grid edges (cols 0 & 6) with a safe centre A at col 3.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Stage 3 wave data — 3 rows × 7 cols  (same grid as Stage 2, harder patterns)
 # ---------------------------------------------------------------------------
-# Stage-2 Wave-4's back-row pattern opens Stage 3; FORBIDDEN spreads into the
-# middle row from Wave 3 onward, and Wave 4 chains ADVANTAGE blasts in all rows.
-# Ideal steps: 36 → 30 → 28 → 19  (decreasing = harder routing each wave).
+# W1 has edge F + centre A; FORBIDDEN spreads into the middle row from Wave 3
+# onward, and Wave 4 chains ADVANTAGE blasts in all rows.
+# Ideal steps: 35 → 30 → 28 → 19  (decreasing = harder routing each wave).
 # ---------------------------------------------------------------------------
 
-# S3-W1 — Corner A + inner F in back; two dense NORMAL rows.
-# Row 0: A@0→N@1; A@6→N@5; N@3 individual. 2×3+1×2=8.
-# Rows 1–2: 7N each. ideal = 8+14+14 = 36.
+# S3-W1 — F at cols 0 & 6 (grid edges), A at col 3 (centre); two dense NORMAL rows.
+# Teaches that FORBIDDEN at the edge can resemble a Normal cube from a distance.
+# Blast safety: |3-0|=3 ✓, |3-6|=3 ✓.
+# Row 0: A@3→N@2,N@4 (3); N@1,N@5 individual (2×2=4) → 7.
+# Rows 1–2: 7N each. ideal = 7+14+14 = 35.
 _S3W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _F, _N, _A),   # row 0 (back)   — 3N + 2A + 2F
+    (_F, _N, _N, _A, _N, _N, _F),   # row 0 (back)   — 4N + 1A + 2F
     (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7N
     (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7N
 )
-_S3W1_IDEAL: int = 36
+_S3W1_IDEAL: int = 35
 
 # S3-W2 — Flanking A + centre F in back; symmetric inner F in middle.
 # Row 0: A@1→N@0,N@2; A@5→N@4,N@6; F@3 falls. 2×3=6.
@@ -561,22 +563,23 @@ STAGE_6_WAVES: tuple[WaveData, ...] = (
 # ---------------------------------------------------------------------------
 # Stage 7 wave data — 5 rows × 9 cols  (same grid as Stage 6, harder patterns)
 # ---------------------------------------------------------------------------
-# Patterns begin with a pure-Normal opener to test raw capture efficiency,
-# escalating to dense F in every row by Wave 4.
-# Ideal steps: 90 → 74 → 64 → 52  (decreasing).
+# W1 opens with flanking FORBIDDEN (no A shortcut) — the player must clear
+# the back row without blast help.  Escalates to dense F in every row by W4.
+# Ideal steps: 86 → 74 → 64 → 52  (decreasing).
 # ---------------------------------------------------------------------------
 
-# S7-W1 — All-Normal across all 5 rows; no A or F — pure efficiency test.
-# No blasts possible; every cube captured individually. Tests sustained pace.
-# Rows 0–4: 9N each. ideal = 5×18 = 90.
+# S7-W1 — F at cols 1 & 7, rest Normal; no A shortcut in the back row.
+# Player cannot blast — every back-row Normal must be captured individually.
+# F@1 and F@7 fall off the edge; 7 Normal remain in the back row.
+# Row 0: 7×2=14 (F fall, no blast). Rows 1–4: 9N each. ideal = 14+18+18+18+18 = 86.
 _S7W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 0 (back)   — 9N
+    (_N, _F, _N, _N, _N, _N, _N, _F, _N),   # row 0 (back)   — 7N + 2F
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
 )
-_S7W1_IDEAL: int = 90
+_S7W1_IDEAL: int = 86
 
 # S7-W2 — Flanking A + inner F clears back; F in mid-1.
 # Row 0: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
