@@ -110,6 +110,7 @@ from constants import (
     IQ_PERCENTAGE_MULTIPLIERS,
     PENALTY_THRESHOLD,
     PERFECT_BONUS_MAX,
+    PLAYER_INITIAL_WAVE_GAP,
     SCORE_ROW_SURVIVAL,
     STAGE_AVALANCHE_TICK_INTERVALS,
     STAGE_GRID_WIDTHS,
@@ -751,6 +752,11 @@ class GameManager:
         self._wave_index = 0
         self._phase = GamePhase.TITLE
         self._spawn_all_waves_pending(player)
+        # Position player PLAYER_INITIAL_WAVE_GAP tiles below wave-0 front so
+        # the opening gap is always exactly 6 clear rows regardless of PLAYER_SPAWN_Z.
+        # Subsequent wave and stage transitions use the normal persistence logic;
+        # this only fires when the wave sequence is (re)initialised from scratch.
+        player.position_near_wave(self.wave_front_z, PLAYER_INITIAL_WAVE_GAP)
 
     def on_restart_key(self, player: Player) -> None:
         """Reset all game state and return to TITLE on any key during GAME_OVER/VICTORY.
