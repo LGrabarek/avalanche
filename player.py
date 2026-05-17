@@ -113,25 +113,30 @@ class Player:
         self._crushed = False
 
     def clamp_z_before_wave(self, wave_front_z: int) -> None:
-        """Ensure the player is not inside the new wave stack at stage start.
+        """Ensure the player is not inside or immediately adjacent to the new wave.
 
-        If the player's Z ≥ wave_front_z (they advanced into where the new
-        stage's wave 0 is placed), pull them back to the nearest valid tile
-        below wave_front_z. No-op when already safe.  Preserves X (Step 33:
-        lateral position persists across stage boundaries).
+        If the player's Z ≥ wave_front_z − 1 (they advanced so close that the
+        new wave would be breathing down their neck), pull them back to the
+        nearest valid tile at or below wave_front_z − 2.  This 2-tile buffer
+        gives the player one full reaction tile between themselves and the
+        wave face during the 2.8 s frozen STAGE_INTRO countdown.  No-op when
+        already safe.  Preserves X (Step 33: lateral position persists across
+        stage boundaries).
 
-        The scan for a valid tile descends from wave_front_z−1 toward z=0 and
-        is bounded by wave_front_z iterations (finite).  In normal play the
-        loop never runs: the first candidate tile (wave_front_z−1 ≈ 47) is
-        always PLATFORM — reaching that depth via penalty-row deletion would
-        require ≈48 misses and triggers GAME_OVER first.
+        The scan for a valid tile descends from wave_front_z−2 toward z=0 and
+        is bounded by wave_front_z−1 iterations (finite).  In normal play the
+        loop never runs: the first candidate tile (wave_front_z−2, which ranges
+        from z=30 at Stage 10 to z=50 at Stage 2) is always PLATFORM — reaching
+        that depth via penalty-row deletion would require as many misses as the
+        candidate z-value itself and triggers GAME_OVER long before then.
         """
-        if wave_front_z <= 0:
-            raise ValueError(f"wave_front_z must be positive, got {wave_front_z}")
-        if self._grid_z < wave_front_z:
-            return  # already safe — no-op
-        # Scan downward from wave_front_z-1 for the nearest walkable tile.
-        for target_z in range(wave_front_z - 1, -1, -1):
+        if wave_front_z <= 1:
+            raise ValueError(f"wave_front_z must be > 1, got {wave_front_z}")
+        if self._grid_z < wave_front_z - 1:
+            return  # already have 2-tile buffer — no-op
+        # Scan downward from wave_front_z-2 for the nearest walkable tile.
+        # The -2 offset ensures a 2-tile gap between the player and wave face.
+        for target_z in range(wave_front_z - 2, -1, -1):
             if self._grid.is_valid_position(self._grid_x, target_z):
                 self._grid_z = target_z
                 assert self._grid.is_valid_position(self._grid_x, self._grid_z), (

@@ -1419,7 +1419,7 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 
 | Step | ID  | Description                            | Status      |
 |------|-----|----------------------------------------|-------------|
-| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | NOT STARTED |
+| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | AWAITING USER |
 | 35   | F2  | Wave variety — distinct openers, Stages 4–10 | NOT STARTED |
 | 36   | F3  | Difficulty curve audit                        | NOT STARTED |
 | 37   | H1  | High score table (localStorage bridge)        | NOT STARTED |
@@ -1429,4 +1429,27 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 | 41   | V2  | Animated player character                     | NOT STARTED |
 | 42   | R1  | Wave arrangement variants + seeded leaderboard| NOT STARTED |
 
-**Next step: Step 34 (opening feel) when ready to implement.**
+**Next step: Step 35 (wave variety) once Step 34 is approved.**
+
+---
+
+### Session — 2026-05-17 — Step 34 (F1) implemented
+
+Step 34 is a constants-only change with one method tweak:
+
+- `PLAYER_SPAWN_Z`: 21 → 37 (Stage-1 opening gap 31 → 15 tiles)
+- `CAMERA_EYE_Z_OFFSET`: 19.5 → 35.5 (preserves 12.4° camera elevation angle)
+- `clamp_z_before_wave` scan: `wave_front_z − 1` → `wave_front_z − 2`
+  (2-tile buffer between clamped player and wave face at Stages 8–10)
+- Guard updated: `wave_front_z <= 0` → `wave_front_z <= 1`
+- Docstring updated to document the 2-tile buffer and new z-range values
+
+Expert panel:
+- Vision Lead: APPROVED WITH CONCERNS — camera geometry comment block stale (fixed)
+- Code Quality: APPROVED — no new logic, ruff + mypy clean
+- Platform Engineer: APPROVED — no WASM-incompatible patterns
+- UX Tester: BLOCKER (fixed) — 1-tile clamp buffer too tight at Stages 8–10
+
+Post-fix: `uv run ruff check .` + `uv run mypy --strict player.py` both clean.
+
+`docs/STEP34_REVIEW.md` written. Awaiting user approval.
