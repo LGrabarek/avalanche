@@ -1407,4 +1407,22 @@ Post-fix: `ruff check` + `mypy --strict` both clean.
 
 **Step 33 APPROVED by user (2026-05-15).**
 
-**Next step: awaiting user direction.**
+---
+
+### Session — 2026-05-15 — v3 planning
+
+v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
+
+**v3 themes:** Feel & balance (primary) + high score table (additional).
+
+**v3 step tracker:**
+
+| Step | ID  | Description                            | Status      |
+|------|-----|----------------------------------------|-------------|
+| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37) | NOT STARTED |
+| 35   | F2  | Wave 1 variety for Stages 4–10        | NOT STARTED |
+| 36   | F3  | Difficulty curve audit                 | NOT STARTED |
+| 37   | H1  | High score table (localStorage)        | NOT STARTED |
+| 38   | U1  | Stage Clear stats screen               | NOT STARTED |
+
+**Next step: Step 34 (opening feel) when ready to implement.**
