@@ -1419,8 +1419,8 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 
 | Step | ID  | Description                            | Status      |
 |------|-----|----------------------------------------|-------------|
-| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | AWAITING USER |
-| 35   | F2  | Wave variety — distinct openers, Stages 4–10 | NOT STARTED |
+| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | APPROVED 2026-05-17 |
+| 35   | F2  | Wave variety — distinct openers, Stages 4–10 | AWAITING USER |
 | 36   | F3  | Difficulty curve audit                        | NOT STARTED |
 | 37   | H1  | High score table (localStorage bridge)        | NOT STARTED |
 | 38   | U1  | Stage Clear stats screen                      | NOT STARTED |
@@ -1429,7 +1429,38 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 | 41   | V2  | Animated player character                     | NOT STARTED |
 | 42   | R1  | Wave arrangement variants + seeded leaderboard| NOT STARTED |
 
-**Next step: Step 35 (wave variety) once Step 34 is approved.**
+**Step 34 APPROVED by user (2026-05-17).**
+
+**Step 35 (F2) — wave variety — AWAITING USER.**
+
+---
+
+### Session — 2026-05-17 — Step 35 (F2) implemented
+
+Step 35 is a wave_data.py-only change. Seven Stage W1 openers redesigned:
+
+- Stage 4: A@col1 (left-skewed), gap at col3 — ideal 51 (was 53, pattern redesigned)
+- Stage 5: Dual A@col2 & col6 — ideal 66 (was 69)
+- Stage 6: A@col1 + A@col7 flanking F@col4 (centre trap) — ideal 82 (was 87)
+- Stage 7: All-Normal 5 rows — ideal 90 (was 83, pattern redesigned; old value invalid)
+- Stage 8: A@col0 (far-left corner) — ideal 107 (was 105)
+- Stage 9: F@col1 & col9 + A@col5 (near-edge traps) — ideal 125 (was 129)
+- Stage 10: Triple A@col2,col5,col8 (full-width chain) — ideal 145 (was 151)
+
+All blast-safety rules verified (A/F ≥2 cols apart). All mirror-safe. All ideal_steps
+arithmetic independently confirmed by Code Quality agent.
+
+Engine concerns resolved during review:
+- Stage 8 A@col0 blast: `_mark_trap_area` bounds-checks neighbors; col-1 skipped. ✓
+- Stage 10 triple-A: trap areas x=1-3, x=4-6, x=7-9 — no overlap. ✓
+
+Expert panel:
+- Vision Lead: APPROVED WITH CONCERNS (5 advisory notes, all non-blocking)
+- Code Quality: APPROVED
+- Platform Engineer: APPROVED
+- UX Tester: APPROVED WITH CONCERNS (Stage 9 double-novelty advisory)
+
+`docs/STEP35_REVIEW.md` written. Awaiting user approval.
 
 ---
 
