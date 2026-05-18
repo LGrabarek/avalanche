@@ -317,12 +317,11 @@ class GameManager:
 
     @property
     def retry_pending(self) -> bool:
-        """True during the WAVE_RISING pause that precedes a crush-retry wave.
+        """True during the WAVE_RISING pause that follows a crush ("Again" state).
 
-        Set at the same time _wave_crushed is cleared in _on_wave_cleared so
-        the retry state is visible during the rising pause.  Cleared in
-        _begin_wave when the replayed wave actually activates.  Use this in
-        overlays and HUD to communicate "same wave again" to the player.
+        Set in _on_wave_cleared when _wave_crushed is cleared; drives the
+        "AGAIN!" overlay banner and the "[AGAIN]" HUD tag.  Cleared in
+        _begin_wave when the next wave activates.
         """
         return self._retry_pending
 
@@ -1111,35 +1110,42 @@ class GameManager:
         self._phase = GamePhase.WAVE_ACTIVE
 
     def _on_wave_cleared(self, player: Player) -> None:
-        """Gate stage completion on clean-clear count; retry current slot on crush.
+        """Gate stage completion on clean-clear count; handle crush with Again flag.
 
         Called when wave.active_cube_count reaches 0.
 
         Crushed path (_wave_crushed is True):
-          _wave_index does NOT advance. The current pool slot is re-spawned
-          (possibly a different A/B variant) so the player retries the same
-          wave position. Pending waves from later slots remain untouched on the
-          grid. _retry_pending is set so the WAVE_RISING banner shows "RETRY!".
+          _retry_pending is set (drives "AGAIN!" banner and [AGAIN] HUD tag).
+          If a later slot exists, _wave_index advances and that pre-placed
+          pending wave activates as-is — no respawn.  If this was the last
+          slot (no next pending wave), _respawn_current_slot re-picks a pool
+          variant so there is always a wave for the player to face.
 
         Clean path (_wave_crushed is False):
           Perfect criteria checked and bonus applied. _clean_clears incremented.
           Stage ends the moment _clean_clears reaches _waves_per_stage (= 4).
-          Otherwise _wave_index advances by one and WAVE_RISING begins.
+          Otherwise _wave_index advances. If the last slot was just cleaned but
+          the stage is not yet complete, _respawn_current_slot provides the next
+          wave from the same pool slot.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
         player.uncrush()
         self._grid.clear_mark()
         if self._wave_crushed:
-            # Retry: re-spawn the current slot (possibly a different variant);
-            # wave_index stays fixed so the counter doesn't advance.
             self._wave_crushed = False
-            self._retry_pending = True
+            self._retry_pending = True   # drives "AGAIN!" banner / [AGAIN] HUD tag
             self._perfect_display = False
-            self._respawn_current_slot()
+            next_index = self._wave_index + 1
+            if next_index < len(self._waves):
+                # Non-last slot: the next pre-placed pending wave becomes the retry.
+                self._wave_index = next_index
+            else:
+                # Last slot: no pending wave waiting; respawn from pool.
+                self._respawn_current_slot()
             self._wave_rising_timer = WAVE_RISING_DURATION
             self._phase = GamePhase.WAVE_RISING
             return
-        # Clean clear: apply Perfect bonus and count the clear.
+        # Clean clear: apply Perfect bonus and count it.
         if self._audio is not None:
             self._audio.play_wave_clear()
         wave_data = self._waves[self._wave_index]
@@ -1155,7 +1161,7 @@ class GameManager:
         self._perfect_display = is_perfect
         self._clean_clears += 1
         if self._clean_clears >= self._waves_per_stage:
-            # All slots cleared — stage complete.
+            # All clean clears earned — stage complete.
             self._end_hold_elapsed = 0.0
             total_stages = (
                 len(self._all_stage_waves) if self._all_stage_waves else len(STAGES)
@@ -1166,12 +1172,11 @@ class GameManager:
             else:
                 self._phase = GamePhase.STAGE_CLEAR
             return
-        # Advance to the next wave slot and start the between-wave pause.
+        # Advance to the next slot; if the batch is exhausted, respawn last slot.
         self._wave_index += 1
-        assert self._wave_index < len(self._waves), (
-            f"wave_index {self._wave_index} exceeded wave count {len(self._waves)} — "
-            "stage-complete check should have fired first"
-        )
+        if self._wave_index >= len(self._waves):
+            self._wave_index = len(self._waves) - 1
+            self._respawn_current_slot()
         self._wave_rising_timer = WAVE_RISING_DURATION
         self._phase = GamePhase.WAVE_RISING
 

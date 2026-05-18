@@ -428,10 +428,10 @@ def _draw_wave_rising_overlay(
     _ = screen.blit(banner, (0, banner_y))
     text_y = banner_y + line_h // 2
     if game.retry_pending:
-        # Crush-retry: show a prominent RETRY! in orange so the player knows
-        # this WAVE_RISING pause is a consequence of a crush (next pre-spawned
-        # wave in line activates — the crushed wave is NOT respawned).
-        retry_surf = big_font.render("RETRY!", True, (255, 140, 40))
+        # Again: show a prominent AGAIN! in orange so the player knows this
+        # WAVE_RISING pause follows a crush. For non-last slots the next
+        # pre-placed pending wave activates; for the last slot it re-spawns.
+        retry_surf = big_font.render("AGAIN!", True, (255, 140, 40))
         retry_x = (SCREEN_WIDTH - retry_surf.get_width()) // 2
         _ = screen.blit(retry_surf, (retry_x, text_y))
         text_y += line_h

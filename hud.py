@@ -118,7 +118,7 @@ class Hud:
         wave_num = self._game.wave_index + 1
         wave_total = self._game.wave_count
         wave_str = f"{wave_num}/{wave_total}" if wave_total > 0 else "---"
-        retry_tag = "  [RETRY]" if self._game.retry_pending else ""
+        retry_tag = "  [AGAIN]" if self._game.retry_pending else ""
         stats: tuple[tuple[str, str], ...] = (
             ("score",   f"Score: {self._game.score}  Mark: {mark_str}"),
             ("penalty", f"Penalty: {self._game.wave_penalty}/{PENALTY_THRESHOLD}"),
