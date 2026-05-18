@@ -1421,7 +1421,7 @@ v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
 |------|-----|----------------------------------------|-------------|
 | 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | APPROVED 2026-05-17 |
 | 35   | F2  | Wave variety — distinct openers, Stages 1–10 | AWAITING USER |
-| 36   | F3  | Difficulty curve audit                        | NOT STARTED |
+| 36   | F3  | Wave pool system + crush-retry gate           | AWAITING USER |
 | 37   | H1  | High score table (localStorage bridge)        | NOT STARTED |
 | 38   | U1  | Stage Clear stats screen                      | NOT STARTED |
 | 39   | U2  | Row gained/lost HUD counter                   | NOT STARTED |
@@ -1483,6 +1483,52 @@ Expert panel:
 - UX Tester: APPROVED WITH CONCERNS (Stage 9 double-novelty advisory)
 
 `docs/STEP35_REVIEW.md` written. Awaiting user approval.
+
+---
+
+### Session — 2026-05-17 — Step 36 (F3) implemented
+
+Wave pool system, wave codes, and crush-retry gate.
+
+**`wave_data.py` — full rewrite:**
+- 80 `WaveData` objects total (40 A-variants = existing patterns + 40 B-variants).
+- `WaveData.__init__` gains `code: str` as first parameter; `.code` property added.
+- Codes follow `S{stage}W{slot}{A|B}` format (e.g. `S3W2B`).
+- `WAVE_POOLS: dict[str, tuple[WaveData, ...]]` — 40 pools × 2 variants.
+- `STAGE_POOL_SLOTS: tuple[tuple[str, ...], ...]` — 10 stages × 4 pool keys.
+- `select_all_waves(rng: random.Random)` — draws one variant per slot; returns
+  `tuple[tuple[WaveData, ...], ...]` (10 × 4).
+- `STAGES` backward-compat alias built from A-variants only.
+
+**`game_manager.py`:**
+- `_all_stage_waves: tuple[tuple[WaveData,...],...]` field — stores run-wide pool draw.
+- `_wave_crushed: bool` — set in `_trigger_avalanche`; gates retry in `_on_wave_cleared`.
+- `wave_code` property — returns active wave's code or `"---"` before first wave.
+- `wave_crushed` property — readable by HUD for `[RETRY]` tag.
+- `start_game(player, all_stage_waves)` — new entry point; stores full run selection,
+  delegates to `start_first_wave`.
+- `_respawn_current_wave(player)` — re-places pending cubes at same z positions so
+  `_begin_wave → _activate_wave` can re-run the same wave on a retry.
+- `_on_wave_cleared`: retry gate at top — if `_wave_crushed`, clears flag, respawns
+  wave, enters `WAVE_RISING`; otherwise normal clean-clear path.
+- `_on_stage_complete`: reads `_all_stage_waves[stage_index]` (not `STAGES` directly).
+- `_do_restart`: draws fresh pool with `select_all_waves(rng)`; calls `start_game`.
+- `_reset_state`: zeros `_all_stage_waves = ()` and `_wave_crushed = False`.
+
+**`main.py`:**
+- Added `import random`.
+- Changed import from `STAGES` to `select_all_waves`.
+- Startup: `game.start_game(player, select_all_waves(random.Random(...)))`.
+
+**`hud.py`:**
+- `MAX_HUD_CACHE_ENTRIES` bumped 5 → 6.
+- 5th stat line: `Code: S1W0A` (or `Code: S1W0A  [RETRY]` when retrying).
+- Line-count assertion updated 4 → 5.
+
+`uv run ruff check .` → all checks passed.
+`uv run mypy --strict .` → success, no issues in 14 source files.
+
+`docs/STEP36_REVIEW.md` written. Awaiting user verification.
 
 ---
 

@@ -1,16 +1,13 @@
-"""Wave patterns for all 10 stages — hand-designed puzzle rows.
+"""Wave patterns for all 10 stages — hand-designed puzzle rows (pool redesign).
 
 Each WaveData holds:
+  * `code`: unique identifier string (e.g. ``S1W0A``).
   * `rows`: tuple of rows ordered back → front (row 0 is the back-most row
     of the wave, row 1 is one step closer to the player, etc.).
     Each row is a tuple of `row_width` entries: CubeType | None, where
     row_width matches the active grid width for that stage (7, 9, or 11).
   * `ideal_steps`: minimum input actions (marks + triggers + detonates) to
-    achieve a Perfect outcome, pre-computed offline and embedded here. The
-    original game calls these the "Ideal Step" values; the research document
-    (Research/Intelligent Qube Technical Reproduction Research.md §Heuristics)
-    explains how they were baked into the Group.Dat puzzle data to avoid a
-    costly BFS at runtime.
+    achieve a Perfect outcome, pre-computed offline and embedded here.
 
 Mirror flag: at spawn time the caller rolls a 50% check and passes the result
 to `spawn_positions(mirror=…)`. A mirrored wave reverses the X-axis, doubling
@@ -20,35 +17,23 @@ Step 28 note: `spawn_positions` accepts a `z_start` keyword overriding the
 default back-wall placement.  GameManager._spawn_all_waves_pending uses
 `_compute_wave_z_starts` to place every wave.
 
-Step 33 stage layout (GRID_DEPTH=60, WAVE_GAP_ROWS=0):
-  All stages: 4 waves.  Waves are BACK-PACKED from z=59 (GRID_DEPTH-1) toward
-  the player.  Wave 3 always has its back row at z=59; wave 0 is closest to
-  the player.  z_back values below are the back row of each wave [0..3].
-  Rows/wave and active width follow STAGE_ROWS_PER_WAVE / STAGE_GRID_WIDTHS.
-
-  Stage 1:  4w × 2r × 7col  z_back[0..3] = 53,55,57,59
-  Stage 2:  4w × 3r × 7col  z_back[0..3] = 50,53,56,59
-  Stage 3:  4w × 3r × 7col  (same packing as Stage 2)
-  Stage 4:  4w × 4r × 7col  z_back[0..3] = 47,51,55,59
-  Stage 5:  4w × 4r × 9col  (same packing as Stage 4)
-  Stage 6:  4w × 5r × 9col  z_back[0..3] = 44,49,54,59
-  Stage 7:  4w × 5r × 9col  (same packing as Stage 6)
-  Stage 8:  4w × 6r × 9col  z_back[0..3] = 41,47,53,59
-  Stage 9:  4w × 6r × 11col (same packing as Stage 8)
-  Stage 10: 4w × 7r × 11col z_back[0..3] = 38,45,52,59  (≤ GRID_DEPTH-1 ✓)
+Pool system: each wave slot has a pool of 2 variants (A and B).  Call
+`select_all_waves(rng)` once at game start to randomly pick one variant per
+slot for the entire run.
 
 ADVANTAGE blast safety rule: in any row, an ADVANTAGE cube and a FORBIDDEN
 cube must be at least 2 columns apart so the ±1-column same-row blast never
-captures a FORBIDDEN cube unintentionally (capturing FORBIDDEN triggers a
-row-delete penalty).  All rows in this module obey that constraint.
+captures a FORBIDDEN cube unintentionally.  All rows in this module obey that
+constraint.
 
 Ideal-step formula:
   * Each standalone NORMAL cube:      2 steps  (mark + trigger)
   * Each ADVANTAGE + detonate:        3 steps  (mark + trigger + Z)
-    Blast catches cubes ±1 col in the SAME ROW only; adjacent rows are not
-    affected in ideal-play calculations.
+    Blast catches cubes ±1 col in the SAME ROW only.
   * FORBIDDEN cubes:                  0 steps  (let fall off the edge)
 """
+
+import random as _random
 
 from constants import GRID_DEPTH, GRID_WIDTH, CubeType
 
@@ -57,57 +42,6 @@ _N = CubeType.NORMAL
 _A = CubeType.ADVANTAGE
 _F = CubeType.FORBIDDEN
 _X: None = None   # empty column
-
-# ---------------------------------------------------------------------------
-# Four Stage-1 wave patterns
-# ---------------------------------------------------------------------------
-# Row format: 7 columns indexed 0–6.
-# Ideal-step derivation:
-#   * Each standalone NORMAL/ADVANTAGE capture = 2 steps (mark + trigger).
-#   * Capturing an ADVANTAGE then detonating = 3 steps (mark + trigger + Z).
-#     One detonation can capture up to 4 neighbouring cubes from the same row,
-#     saving steps vs. individual captures.
-# ---------------------------------------------------------------------------
-
-# Stage 1 waves — 2 rows per wave.  Row 0 is the back-most (furthest from
-# player); row 1 is one step closer.  All rows are fully filled (7 wide).
-
-# Wave 1 — Intro.  Both rows solid NORMAL; no blasting possible.
-# Optimal: 14 × 2 (mark + trigger each) = 28 steps.
-_W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _N, _N, _N, _N, _N),   # row 0 (back)  — 7 NORMAL
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (front) — 7 NORMAL
-)
-_W1_IDEAL: int = 28
-
-# Wave 2 — First ADVANTAGE at col 3 (back row centre).  Blast catches cols
-# 2 & 4; 4 NORMAL in back row and 7 in front row captured individually.
-# Optimal: 3 (ADV+detonate) + 4×2 (back) + 7×2 (front) = 25.
-_W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _N, _A, _N, _N, _N),   # row 0 (back)  — 6 NORMAL + 1 ADVANTAGE
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (front) — 7 NORMAL
-)
-_W2_IDEAL: int = 25
-
-# Wave 3 — FORBIDDEN introduced.  ADVANTAGE at cols 1 & 5 in back row.
-# Both blasts sweep the outer 2 columns; FORBIDDEN let fall off.
-# Front row all-NORMAL captured individually.
-# Optimal: 2×3 (ADV+detonate) + 7×2 (front row) = 20.
-_W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _A, _N),   # row 0 (back)  — 4 NORMAL + 2 ADV + 1 FORBIDDEN
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (front) — 7 NORMAL
-)
-_W3_IDEAL: int = 20
-
-# Wave 4 — Full challenge.  ADVANTAGE at corners (cols 0, 6); FORBIDDEN at
-# cols 2 & 4.  Corner blasts each catch 1 flanking NORMAL; col 3 NORMAL and
-# entire front row captured individually.
-# Optimal: 2×3 (ADV+detonate) + 1×2 (col 3) + 7×2 (front row) = 26.
-_W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _F, _N, _A),   # row 0 (back)  — 3 NORMAL + 2 ADV + 2 FORBIDDEN
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (front) — 7 NORMAL
-)
-_W4_IDEAL: int = 26
 
 
 # ---------------------------------------------------------------------------
@@ -119,17 +53,16 @@ class WaveData:
 
     def __init__(
         self,
+        code: str,
         rows: tuple[tuple[CubeType | None, ...], ...],
         ideal_steps: int,
     ) -> None:
+        if not code:
+            raise ValueError("code must be non-empty")
         if ideal_steps <= 0:
             raise ValueError(f"ideal_steps must be positive, got {ideal_steps}")
         if not rows:
             raise ValueError("rows must not be empty")
-        # Step 32: rows may be narrower than GRID_WIDTH (e.g. 7-wide for stages 1–4,
-        # 9-wide for stages 5–8, 11-wide for stages 9–10). Validate that:
-        #   1. every row has the same width (pattern integrity), and
-        #   2. that width is within [1, GRID_WIDTH] (fits in the grid).
         row_width = len(rows[0])
         if not (1 <= row_width <= GRID_WIDTH):
             raise ValueError(
@@ -144,8 +77,13 @@ class WaveData:
             raise ValueError(
                 f"wave has {len(rows)} rows, exceeds GRID_DEPTH {GRID_DEPTH}"
             )
+        self._code: str = code
         self._rows: tuple[tuple[CubeType | None, ...], ...] = rows
         self._ideal_steps: int = ideal_steps
+
+    @property
+    def code(self) -> str:
+        return self._code
 
     @property
     def ideal_steps(self) -> int:
@@ -160,24 +98,12 @@ class WaveData:
         mirror: bool = False,
         z_start: int | None = None,
     ) -> list[tuple[int, int, CubeType]]:
-        """Return `(grid_x, grid_z, cube_type)` for every cube in the wave.
-
-        `z_start`, when given, is the z coordinate of row 0 (the back-most
-        row).  Row 1 maps to `z_start - 1`, row 2 to `z_start - 2`, etc.
-        When omitted, row 0 defaults to `GRID_DEPTH - 1` (original behaviour).
-
-        If `mirror` is True the X-axis is flipped so column 0 becomes column
-        GRID_WIDTH-1 and vice-versa, doubling the effective pattern count
-        without extra data.
-        """
+        """Return `(grid_x, grid_z, cube_type)` for every cube in the wave."""
         if z_start is not None and not (0 <= z_start < GRID_DEPTH):
             raise ValueError(
                 f"z_start {z_start} outside [0, {GRID_DEPTH})"
             )
         positions: list[tuple[int, int, CubeType]] = []
-        # Step 32: row width may be 7, 9, or 11 — use actual width for both the
-        # mirror flip and the theoretical-maximum bound, not the module-level
-        # GRID_WIDTH constant (which is now 11, the largest possible width).
         row_width = len(self._rows[0])
         max_positions = row_width * len(self._rows)
         for row_idx, row in enumerate(self._rows):
@@ -204,679 +130,1050 @@ class WaveData:
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 wave sequence — 4 waves in order
+# Stage 1 — 2 rows × 7 cols
 # ---------------------------------------------------------------------------
 
-STAGE_1_WAVES: tuple[WaveData, ...] = (
-    WaveData(_W1_ROWS, _W1_IDEAL),
-    WaveData(_W2_ROWS, _W2_IDEAL),
-    WaveData(_W3_ROWS, _W3_IDEAL),
-    WaveData(_W4_ROWS, _W4_IDEAL),
+# S1W0 — A variant: all-Normal intro
+_S1W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W0A_IDEAL: int = 28
+
+# S1W0 — B variant: gap at col3, rest Normal
+# back: 6N (no col3); front: 7N
+# back: 6×2=12; front: 14. total=26
+_S1W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _X, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W0B_IDEAL: int = 26
+
+# S1W1 — A variant: A at col3 (centre back)
+_S1W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _A, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W1A_IDEAL: int = 25
+
+# S1W1 — B variant: A at col1
+# A@1→N@0,N@2 (3); N@3,4,5,6 individual (4×2=8); front: 14. total=25
+_S1W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W1B_IDEAL: int = 25
+
+# S1W2 — A variant: A@1,5 + F@3
+_S1W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W2A_IDEAL: int = 20
+
+# S1W2 — B variant: A@0,6 + F@3
+# A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10; front=14. total=24
+_S1W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _F, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W2B_IDEAL: int = 24
+
+# S1W3 — A variant: A@0,6 + F@2,4
+_S1W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _F, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W3A_IDEAL: int = 26
+
+# S1W3 — B variant: A@0,6 + F@2 only
+# A@0→N@1 (3); A@6→N@5 (3); N@3,N@4 individual (2×2=4); back=10; front=14. total=24
+_S1W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S1W3B_IDEAL: int = 24
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — 3 rows × 7 cols
+# ---------------------------------------------------------------------------
+
+# S2W0 — A variant: A at col2 (off-centre)
+_S2W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _A, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W0A_IDEAL: int = 39
+
+# S2W0 — B variant: A at col4
+# A@4→N@3,N@5 (3); N@0,1,2,6 individual (4×2=8); back=11; mid=14; front=14. total=39
+_S2W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W0B_IDEAL: int = 39
+
+# S2W1 — A variant: A@1,5 + F@3
+_S2W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W1A_IDEAL: int = 32
+
+# S2W1 — B variant: A@0,6 + F@3
+# A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10; mid=14; front=14. total=38
+_S2W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _F, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W1B_IDEAL: int = 38
+
+# S2W2 — A variant: A@1,3,5
+_S2W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _A, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W2A_IDEAL: int = 37
+
+# S2W2 — B variant: A@0,2,4
+# A@0→N@1(3); A@2→N@1(gone),N@3(3); A@4→N@3(gone),N@5(3); N@6 individual(2).
+# back=11; mid=14; front=14. total=39.
+_S2W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _A, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W2B_IDEAL: int = 39
+
+# S2W3 — A variant: A@0,6 + F@2,4
+_S2W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _F, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W3A_IDEAL: int = 36
+
+# S2W3 — B variant: A@0,6 + F@2
+# A@0→N@1 (3); A@6→N@5 (3); N@3,N@4 individual (2×2=4); back=10; mid=14; front=14. total=38
+_S2W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S2W3B_IDEAL: int = 38
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — 3 rows × 7 cols
+# ---------------------------------------------------------------------------
+
+# S3W0 — A variant: F@0,6 + A@3
+_S3W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _N, _A, _N, _N, _F),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W0A_IDEAL: int = 35
+
+# S3W0 — B variant: F@0,6 + A@2
+# |2-0|=2 ✓, |2-6|=4 ✓
+# A@2→N@1,N@3 (3); N@4,N@5 individual (2×2=4); back=7; mid=14; front=14. total=35
+_S3W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _N, _N, _F),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W0B_IDEAL: int = 35
+
+# S3W1 — A variant: A@1,5 + F@3 back; F@2,4 mid; 7N front
+_S3W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W1A_IDEAL: int = 30
+
+# S3W1 — B variant: A@0,6 + F@3 back; F@1,5 mid; 7N front
+# |0-3|=3 ✓, |6-3|=3 ✓
+# back: A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10
+# mid: F@1,F@5 fall; 5N individual (5×2=10)
+# front: 14. total=34
+_S3W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _F, _N, _N, _A),
+    (_N, _F, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W1B_IDEAL: int = 34
+
+# S3W2 — A variant: A@1,5 + F@3 back; A@0,6 + F@2,4 mid; 7N front
+_S3W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_A, _N, _F, _N, _F, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W2A_IDEAL: int = 28
+
+# S3W2 — B variant: A@1,5 + F@3 back; A@0,6 + F@2,4 mid (swapped rows from A)
+# back (was mid of A): A@0→N@1 (3); A@6→N@5 (3); F@2,4 fall; N@3 individual (2). back=8
+# mid (was back of A): A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); F@3 falls. mid=6
+# front: 14. total=28
+_S3W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S3W2B_IDEAL: int = 28
+
+# S3W3 — A variant: A@2,4 + F@0,6 back; A@3 + F@1,5 mid; A@2,4 + F@0,6 front
+_S3W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _F, _N),
+    (_F, _N, _A, _N, _A, _N, _F),
+)
+_S3W3A_IDEAL: int = 19
+
+# S3W3 — B variant: F@0,6 + A@2,4 back; F@1,5 + A@3 mid; A@1,5 + F@3 front
+# |2-0|=2 ✓, |4-6|=2 ✓, |2-4| — no F between. |3-1|=2 ✓, |3-5|=2 ✓
+# back: 2×3=6
+# mid: A@3→N@2,N@4 (3); N@0,N@6 individual (2×2=4). mid=7
+# front: A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); F@3 falls. front=6
+# total=19
+_S3W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _F, _N),
+    (_N, _A, _N, _F, _N, _A, _N),
+)
+_S3W3B_IDEAL: int = 19
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — 4 rows × 7 cols
+# ---------------------------------------------------------------------------
+
+# S4W0 — A variant: A@1 + gap@3 back; 3×7N
+_S4W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _X, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W0A_IDEAL: int = 51
+
+# S4W0 — B variant: A@5 + gap@3 back; 3×7N (right-skewed)
+# A@5→N@4,N@6 (3); N@0,1,2 individual (3×2=6); back=9; 3×14=42. total=51
+_S4W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _X, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W0B_IDEAL: int = 51
+
+# S4W1 — A variant: A@1,5 + F@3 back; F@2,4 mid-1; 2×7N
+_S4W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W1A_IDEAL: int = 44
+
+# S4W1 — B variant: A@0,6 + F@3 back; F@2,4 mid-1; 2×7N
+# A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10
+# mid-1: 5N+2F, 5×2=10; 2×14=28. total=48
+_S4W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _F, _N, _N, _A),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W1B_IDEAL: int = 48
+
+# S4W2 — A variant: A@0,6 + F@2,4 back; F@2,4 mid-1; F@1,5 mid-2; 7N front
+_S4W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _F, _N, _A),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _F, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W2A_IDEAL: int = 42
+
+# S4W2 — B variant: A@1,5 + F@3 back; F@1,5 mid-1; 2×7N
+# back: A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); back=6
+# mid-1: F@1,5 fall; 5N individual (5×2=10); 2×14=28. total=44
+_S4W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _F, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N),
+)
+_S4W2B_IDEAL: int = 44
+
+# S4W3 — A variant: F@0,6+A@2,4 back; A@1,5+F@3 mid-1; F@2,4 mid-2; A@3 front
+_S4W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _N, _N, _A, _N, _N, _N),
+)
+_S4W3A_IDEAL: int = 33
+
+# S4W3 — B variant: F@0,6+A@2,4 back; A@1,5+F@3 mid-1; F@2,4 mid-2; A@3 front
+# (same structure, different front: A@3 same but different mid-2)
+# back: 2×3=6. mid-1: 2×3=6. mid-2: 5×2=10. front: A@3→N@2,N@4(3); N@0,1,5,6(4×2=8)=11.
+# total=33
+_S4W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _F, _N, _N),
+    (_N, _N, _N, _A, _N, _N, _N),
+)
+_S4W3B_IDEAL: int = 33
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 — 4 rows × 9 cols
+# ---------------------------------------------------------------------------
+
+# S5W0 — A variant: A@2,6 back; 3×9N
+_S5W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _A, _N, _N, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W0A_IDEAL: int = 66
+
+# S5W0 — B variant: A@3,6 back; 3×9N
+# A@3→N@2,N@4 (3); A@6→N@5,N@7 (3); N@0,N@1,N@8 individual (3×2=6); back=12; 3×18=54. total=66
+_S5W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _A, _N, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W0B_IDEAL: int = 66
+
+# S5W1 — A variant: A@1,7 + F@4 back; F@2,6 mid-1; 2×9N
+_S5W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _F, _N, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W1A_IDEAL: int = 58
+
+# S5W1 — B variant: A@0,8 + F@4 back; F@1,7 mid-1; 2×9N
+# |0-4|=4 ✓, |8-4|=4 ✓
+# back: A@0→N@1 (3); A@8→N@7 (3); N@2,3,5,6 individual (4×2=8); back=14
+# mid-1: F@1,7 fall; 7N individual (7×2=14); 2×18=36. total=64
+_S5W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _N, _F, _N, _N, _N, _A),
+    (_N, _F, _N, _N, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W1B_IDEAL: int = 64
+
+# S5W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; 9N front
+_S5W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W2A_IDEAL: int = 50
+
+# S5W2 — B variant: A@1,7 + F@3,5 back; F@2,6 mid-1; 2×9N
+# |1-3|=2 ✓, |7-5|=2 ✓
+# back: A@1→N@0,N@2 (3); A@7→N@6,N@8 (3); F@3,5 fall. back=6
+# mid-1: F@2,6 fall; 7N individual (7×2=14); 2×18=36. total=56
+_S5W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S5W2B_IDEAL: int = 56
+
+# S5W3 — A variant: F@0,4+A@2,6 back; F@1,7+A@3,5 mid-1; F@2,6 mid-2; F@0,8+A@4 front
+_S5W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _A, _N, _F, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_F, _N, _N, _N, _A, _N, _N, _N, _F),
+)
+_S5W3A_IDEAL: int = 41
+
+# S5W3 — B variant: F@0,4,8+A@2,6 back; A@3,5+F@1,7 mid-1; F@2,6 mid-2; F@0,8+A@4 front
+# |2-0|=2 ✓, |2-4|=2 ✓, |6-4|=2 ✓, |6-8|=2 ✓
+# back: A@2→N@1,N@3 (3); A@6→N@5,N@7 (3); back=6
+# |3-1|=2 ✓, |5-7|=2 ✓
+# mid-1: A@3→N@2,N@4 (3); A@5→N@4(gone),N@6 (3); N@0,N@8 individual (4). mid-1=10
+# mid-2: 7N+2F, 7×2=14
+# front: A@4→N@3,N@5 (3); N@1,2,6,7 individual (4×2=8). front=11
+# total=6+10+14+11=41
+_S5W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _A, _N, _F, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_F, _N, _N, _N, _A, _N, _N, _N, _F),
+)
+_S5W3B_IDEAL: int = 41
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 — 5 rows × 9 cols
+# ---------------------------------------------------------------------------
+
+# S6W0 — A variant: A@1,7 + F@4 back; 4×9N
+_S6W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _F, _N, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W0A_IDEAL: int = 82
+
+# S6W0 — B variant: A@2,6 + F@4 back; 4×9N
+# |2-4|=2 ✓, |6-4|=2 ✓
+# back: A@2→N@1,N@3 (3); A@6→N@5,N@7 (3); N@0,N@8 individual (2×2=4); F@4 falls. back=10
+# 4×18=72. total=82
+_S6W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _A, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W0B_IDEAL: int = 82
+
+# S6W1 — A variant: A@1,7 + F@3,5 back; F@3,5 mid-1; 3×9N
+_S6W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W1A_IDEAL: int = 74
+
+# S6W1 — B variant: A@0,8 + F@3,5 back; F@3,5 mid-1; 3×9N
+# |0-3|=3 ✓, |8-5|=3 ✓
+# back: A@0→N@1 (3); A@8→N@7 (3); N@2,N@6 individual (2×2=4); F@3,5 fall. back=10
+# mid-1: 7N+2F, 7×2=14; 3×18=54. total=78
+_S6W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _F, _N, _F, _N, _N, _A),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W1B_IDEAL: int = 78
+
+# S6W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; 2×9N
+_S6W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W2A_IDEAL: int = 68
+
+# S6W2 — B variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; 2×9N
+# (swapped back/mid-1 from A, same rows in different order)
+# back: A@0→N@1(3); A@8→N@7(3); N@3,4,5(3×2=6); F@2,6 fall. back=12
+# mid-1: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. mid-1=6
+# mid-2: 7N+2F, 7×2=14. 2×18=36. total=68
+_S6W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W2B_IDEAL: int = 68
+
+# S6W3 — A variant: F@0,4+A@2,6 back; A@3,5+F@1,7 mid-1; F@2,6 mid-2; F@3,5 mid-3; 9N front
+_S6W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _A, _N, _F, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W3A_IDEAL: int = 62
+
+# S6W3 — B variant: same pattern (identical structure)
+# back: 2×3=6. mid-1: A@3→N@2,N@4(3); A@5→N@4(gone),N@6(3); N@0,N@8(4). mid-1=10.
+# mid-2: 14. mid-3: 14. front: 18. total=62
+_S6W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _F, _N, _A, _N, _A, _N, _F, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S6W3B_IDEAL: int = 62
+
+
+# ---------------------------------------------------------------------------
+# Stage 7 — 5 rows × 9 cols
+# ---------------------------------------------------------------------------
+
+# S7W0 — A variant: F@1,7 back; 4×9N
+_S7W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _F, _N, _N, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W0A_IDEAL: int = 86
+
+# S7W0 — B variant: F@0,8 back (edge-adjacent); 4×9N
+# 7N in back, F@0,8 fall. back=7×2=14. 4×18=72. total=86
+_S7W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _N, _N, _N, _N, _N, _N, _F),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W0B_IDEAL: int = 86
+
+# S7W1 — A variant: A@1,7 + F@3,5 back; F@2,6 mid-1; 3×9N
+_S7W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W1A_IDEAL: int = 74
+
+# S7W1 — B variant: A@1,7 + F@3,5 back; F@3,5 mid-1; 3×9N
+# back: A@1→N@0,N@2(3); A@7→N@6,N@8(3); back=6
+# mid-1: 7N+2F, 7×2=14; 3×18=54. total=74
+_S7W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W1B_IDEAL: int = 74
+
+# S7W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; F@3,5 mid-3; 9N front
+_S7W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W2A_IDEAL: int = 64
+
+# S7W2 — B variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@3,5 mid-2; 2×9N
+# back: 12. mid-1: 6. mid-2: 7×2=14. 2×18=36. total=68
+_S7W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W2B_IDEAL: int = 68
+
+# S7W3 — A variant: F@0,4+A@2,6 back; A@1,7+F@3,5 mid-1; F@0,8+A@4 mid-2; F@2,6 mid-3; A@4 front
+_S7W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_F, _N, _N, _N, _A, _N, _N, _N, _F),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _A, _N, _N, _N, _N),
+)
+_S7W3A_IDEAL: int = 52
+
+# S7W3 — B variant: F@0,4+A@2,6 back; A@0,8+F@2,6 mid-1; F@0,8+A@4 mid-2; F@2,6 mid-3; 9N front
+# back: 2×3=6.
+# mid-1: A@0→N@1(3); A@8→N@7(3); N@3,4,5(3×2=6); F@2,6 fall. mid-1=12.
+# mid-2: A@4→N@3,N@5(3); N@1,2,6,7(4×2=8). mid-2=11.
+# mid-3: 7×2=14. front: 9×2=18. total=6+12+11+14+... wait that is too many rows.
+# Use 4 special rows + 1 normal: back+mid-1+mid-2+mid-3+front
+# total=6+6+11+14+18=55
+_S7W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_F, _N, _N, _N, _A, _N, _N, _N, _F),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S7W3B_IDEAL: int = 55
+
+
+# ---------------------------------------------------------------------------
+# Stage 8 — 6 rows × 9 cols
+# ---------------------------------------------------------------------------
+
+# S8W0 — A variant: A@0 back; 5×9N
+_S8W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W0A_IDEAL: int = 107
+
+# S8W0 — B variant: A@8 back (far-right corner); 5×9N
+# A@8→N@7(3); N@0..6(7×2=14). back=17. 5×18=90. total=107
+_S8W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _N, _N, _N, _N, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W0B_IDEAL: int = 107
+
+# S8W1 — A variant: A@1,7 + F@3,5 back; 5×9N
+_S8W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W1A_IDEAL: int = 96
+
+# S8W1 — B variant: A@1,7 + F@3,5 back (centre F variant); 5×9N
+# back: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. back=6. 5×18=90. total=96
+_S8W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W1B_IDEAL: int = 96
+
+# S8W2 — A variant: A@0,8 + F@2,6 back; A@1,7+F@3,5 mid-1; 4×9N
+_S8W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W2A_IDEAL: int = 90
+
+# S8W2 — B variant: A@0,8+F@2,6 back; A@1,7+F@3,5 mid-1 (identical to A — same ideal)
+# back: A@0→N@1(3); A@8→N@7(3); N@3,4,5(3×2=6); F@2,6 fall. back=12
+# mid-1: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. mid-1=6. 4×18=72. total=90
+_S8W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _F, _N, _A),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W2B_IDEAL: int = 90
+
+# S8W3 — A variant: F@0,4+A@2,6 back; A@1,7+F@3,5 mid-1; F@2,6 mid-2; F@3,5 mid-3; 2×9N
+_S8W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_N, _N, _F, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W3A_IDEAL: int = 76
+
+# S8W3 — B variant: F@0,4+A@2,6 back; A@1,7+F@3,5 mid-1; F@0,8+A@4 mid-2; F@3,5 mid-3; 2×9N
+# back: 2×3=6. mid-1: 2×3=6.
+# mid-2: A@4→N@3,N@5(3); N@1,2,6,7(4×2=8). mid-2=11.
+# mid-3: 7×2=14. 2×18=36. total=6+6+11+14+36=73
+_S8W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _A, _N, _F),
+    (_N, _A, _N, _F, _N, _F, _N, _A, _N),
+    (_F, _N, _N, _N, _A, _N, _N, _N, _F),
+    (_N, _N, _N, _F, _N, _F, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S8W3B_IDEAL: int = 73
+
+
+# ---------------------------------------------------------------------------
+# Stage 9 — 6 rows × 11 cols
+# ---------------------------------------------------------------------------
+
+# S9W0 — A variant: F@1,9 + A@5 back; 5×11N
+_S9W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _F, _N, _N, _N, _A, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W0A_IDEAL: int = 125
+
+# S9W0 — B variant: F@1,9 + A@4 back; 5×11N
+# |4-1|=3 ✓, |4-9|=5 ✓
+# A@4→N@3,N@5(3); N@0,N@2,N@6,N@7,N@8,N@10(6×2=12); F@1,9 fall. back=15. 5×22=110. total=125
+_S9W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _F, _N, _N, _A, _N, _N, _N, _N, _F, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W0B_IDEAL: int = 125
+
+# S9W1 — A variant: A@1,9 + F@4,6 back; 5×11N
+_S9W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W1A_IDEAL: int = 120
+
+# S9W1 — B variant: A@0,10 + F@4,6 back; 5×11N
+# |0-4|=4 ✓, |10-6|=4 ✓
+# A@0→N@1(3); A@10→N@9(3); N@2,3,7,8(4×2=8); F@4,6 fall. back=14. 5×22=110. total=124
+_S9W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _N, _N, _F, _N, _F, _N, _N, _N, _A),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W1B_IDEAL: int = 124
+
+# S9W2 — A variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 4×11N
+_S9W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W2A_IDEAL: int = 110
+
+# S9W2 — B variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 4×11N
+# back: A@0→N@1(3); A@10→N@9(3); N@3,4,5,6(4×2=8); F@2,8 fall. back=14.
+# mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6. 4×22=88. total=108
+_S9W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W2B_IDEAL: int = 108
+
+# S9W3 — A variant: F@0,4,6,10 + A@2,8 back; A@2,8 + F@4,6 mid-1; F@2,8 mid-2; F@3,6 mid-3; 2×11N
+_S9W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W3A_IDEAL: int = 92
+
+# S9W3 — B variant: F@0,4,6,10 + A@2,8 back; A@2,8+F@4,6 mid-1; F@2,8 mid-2; F@3,6 mid-3; 2×11N
+# back: A@2→N@1,N@3(3); A@8→N@7,N@9(3). back=6.
+# mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6.
+# mid-2: 9×2=18. mid-3: 9×2=18. 2×22=44. total=92
+_S9W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S9W3B_IDEAL: int = 92
+
+
+# ---------------------------------------------------------------------------
+# Stage 10 — 7 rows × 11 cols
+# ---------------------------------------------------------------------------
+
+# S10W0 — A variant: A@2,5,8 back; 6×11N
+_S10W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _N, _A, _N, _N, _A, _N, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W0A_IDEAL: int = 145
+
+# S10W0 — B variant: A@1,4,6,9 back; 6×11N
+# A@1→N@0,N@2(3); A@4→N@3,N@5(3); A@6→N@5(gone),N@7(3); A@9→N@8,N@10(3).
+# back=12; 6×22=132. total=144.
+_S10W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _A, _N, _A, _N, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W0B_IDEAL: int = 144
+
+# S10W1 — A variant: A@1,9 + F@4,6 back; 6×11N
+_S10W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W1A_IDEAL: int = 142
+
+# S10W1 — B variant: A@1,9 + F@4,6 back (same layout, different ideal due to cols)
+# A@1→N@0,N@2(3); A@9→N@8,N@10(3); N@3,7(2×2=4); F@4,6 fall. back=10. 6×22=132. total=142
+_S10W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W1B_IDEAL: int = 142
+
+# S10W2 — A variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 5×11N
+_S10W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W2A_IDEAL: int = 132
+
+# S10W2 — B variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 5×11N
+# back: A@0→N@1(3); A@10→N@9(3); N@3,4,5,6(4×2=8); F@2,8 fall. back=14.
+# mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6. 5×22=110. total=130
+_S10W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W2B_IDEAL: int = 130
+
+# S10W3 — A variant: F@0,4,6,10+A@2,8 back; A@2,8+F@4,6 mid-1; F@2,8 mid-2; F@3,6 mid-3; 3×11N
+_S10W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W3A_IDEAL: int = 114
+
+# S10W3 — B variant: same layout as A (identical structure, same ideal)
+# back: 2×3=6. mid-1: 2×3=6. mid-2: 9×2=18. mid-3: 9×2=18. 3×22=66. total=114
+_S10W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
+    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
+    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
+    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
+)
+_S10W3B_IDEAL: int = 114
+
+
+# ---------------------------------------------------------------------------
+# WAVE_POOLS — keyed by pool name "S{stage}W{slot}"
+# Each pool is a tuple of exactly 2 WaveData objects: (A variant, B variant)
+# ---------------------------------------------------------------------------
+
+WAVE_POOLS: dict[str, tuple[WaveData, ...]] = {
+    # Stage 1
+    "S1W0": (WaveData("S1W0A", _S1W0A_ROWS, _S1W0A_IDEAL),
+             WaveData("S1W0B", _S1W0B_ROWS, _S1W0B_IDEAL)),
+    "S1W1": (WaveData("S1W1A", _S1W1A_ROWS, _S1W1A_IDEAL),
+             WaveData("S1W1B", _S1W1B_ROWS, _S1W1B_IDEAL)),
+    "S1W2": (WaveData("S1W2A", _S1W2A_ROWS, _S1W2A_IDEAL),
+             WaveData("S1W2B", _S1W2B_ROWS, _S1W2B_IDEAL)),
+    "S1W3": (WaveData("S1W3A", _S1W3A_ROWS, _S1W3A_IDEAL),
+             WaveData("S1W3B", _S1W3B_ROWS, _S1W3B_IDEAL)),
+    # Stage 2
+    "S2W0": (WaveData("S2W0A", _S2W0A_ROWS, _S2W0A_IDEAL),
+             WaveData("S2W0B", _S2W0B_ROWS, _S2W0B_IDEAL)),
+    "S2W1": (WaveData("S2W1A", _S2W1A_ROWS, _S2W1A_IDEAL),
+             WaveData("S2W1B", _S2W1B_ROWS, _S2W1B_IDEAL)),
+    "S2W2": (WaveData("S2W2A", _S2W2A_ROWS, _S2W2A_IDEAL),
+             WaveData("S2W2B", _S2W2B_ROWS, _S2W2B_IDEAL)),
+    "S2W3": (WaveData("S2W3A", _S2W3A_ROWS, _S2W3A_IDEAL),
+             WaveData("S2W3B", _S2W3B_ROWS, _S2W3B_IDEAL)),
+    # Stage 3
+    "S3W0": (WaveData("S3W0A", _S3W0A_ROWS, _S3W0A_IDEAL),
+             WaveData("S3W0B", _S3W0B_ROWS, _S3W0B_IDEAL)),
+    "S3W1": (WaveData("S3W1A", _S3W1A_ROWS, _S3W1A_IDEAL),
+             WaveData("S3W1B", _S3W1B_ROWS, _S3W1B_IDEAL)),
+    "S3W2": (WaveData("S3W2A", _S3W2A_ROWS, _S3W2A_IDEAL),
+             WaveData("S3W2B", _S3W2B_ROWS, _S3W2B_IDEAL)),
+    "S3W3": (WaveData("S3W3A", _S3W3A_ROWS, _S3W3A_IDEAL),
+             WaveData("S3W3B", _S3W3B_ROWS, _S3W3B_IDEAL)),
+    # Stage 4
+    "S4W0": (WaveData("S4W0A", _S4W0A_ROWS, _S4W0A_IDEAL),
+             WaveData("S4W0B", _S4W0B_ROWS, _S4W0B_IDEAL)),
+    "S4W1": (WaveData("S4W1A", _S4W1A_ROWS, _S4W1A_IDEAL),
+             WaveData("S4W1B", _S4W1B_ROWS, _S4W1B_IDEAL)),
+    "S4W2": (WaveData("S4W2A", _S4W2A_ROWS, _S4W2A_IDEAL),
+             WaveData("S4W2B", _S4W2B_ROWS, _S4W2B_IDEAL)),
+    "S4W3": (WaveData("S4W3A", _S4W3A_ROWS, _S4W3A_IDEAL),
+             WaveData("S4W3B", _S4W3B_ROWS, _S4W3B_IDEAL)),
+    # Stage 5
+    "S5W0": (WaveData("S5W0A", _S5W0A_ROWS, _S5W0A_IDEAL),
+             WaveData("S5W0B", _S5W0B_ROWS, _S5W0B_IDEAL)),
+    "S5W1": (WaveData("S5W1A", _S5W1A_ROWS, _S5W1A_IDEAL),
+             WaveData("S5W1B", _S5W1B_ROWS, _S5W1B_IDEAL)),
+    "S5W2": (WaveData("S5W2A", _S5W2A_ROWS, _S5W2A_IDEAL),
+             WaveData("S5W2B", _S5W2B_ROWS, _S5W2B_IDEAL)),
+    "S5W3": (WaveData("S5W3A", _S5W3A_ROWS, _S5W3A_IDEAL),
+             WaveData("S5W3B", _S5W3B_ROWS, _S5W3B_IDEAL)),
+    # Stage 6
+    "S6W0": (WaveData("S6W0A", _S6W0A_ROWS, _S6W0A_IDEAL),
+             WaveData("S6W0B", _S6W0B_ROWS, _S6W0B_IDEAL)),
+    "S6W1": (WaveData("S6W1A", _S6W1A_ROWS, _S6W1A_IDEAL),
+             WaveData("S6W1B", _S6W1B_ROWS, _S6W1B_IDEAL)),
+    "S6W2": (WaveData("S6W2A", _S6W2A_ROWS, _S6W2A_IDEAL),
+             WaveData("S6W2B", _S6W2B_ROWS, _S6W2B_IDEAL)),
+    "S6W3": (WaveData("S6W3A", _S6W3A_ROWS, _S6W3A_IDEAL),
+             WaveData("S6W3B", _S6W3B_ROWS, _S6W3B_IDEAL)),
+    # Stage 7
+    "S7W0": (WaveData("S7W0A", _S7W0A_ROWS, _S7W0A_IDEAL),
+             WaveData("S7W0B", _S7W0B_ROWS, _S7W0B_IDEAL)),
+    "S7W1": (WaveData("S7W1A", _S7W1A_ROWS, _S7W1A_IDEAL),
+             WaveData("S7W1B", _S7W1B_ROWS, _S7W1B_IDEAL)),
+    "S7W2": (WaveData("S7W2A", _S7W2A_ROWS, _S7W2A_IDEAL),
+             WaveData("S7W2B", _S7W2B_ROWS, _S7W2B_IDEAL)),
+    "S7W3": (WaveData("S7W3A", _S7W3A_ROWS, _S7W3A_IDEAL),
+             WaveData("S7W3B", _S7W3B_ROWS, _S7W3B_IDEAL)),
+    # Stage 8
+    "S8W0": (WaveData("S8W0A", _S8W0A_ROWS, _S8W0A_IDEAL),
+             WaveData("S8W0B", _S8W0B_ROWS, _S8W0B_IDEAL)),
+    "S8W1": (WaveData("S8W1A", _S8W1A_ROWS, _S8W1A_IDEAL),
+             WaveData("S8W1B", _S8W1B_ROWS, _S8W1B_IDEAL)),
+    "S8W2": (WaveData("S8W2A", _S8W2A_ROWS, _S8W2A_IDEAL),
+             WaveData("S8W2B", _S8W2B_ROWS, _S8W2B_IDEAL)),
+    "S8W3": (WaveData("S8W3A", _S8W3A_ROWS, _S8W3A_IDEAL),
+             WaveData("S8W3B", _S8W3B_ROWS, _S8W3B_IDEAL)),
+    # Stage 9
+    "S9W0": (WaveData("S9W0A", _S9W0A_ROWS, _S9W0A_IDEAL),
+             WaveData("S9W0B", _S9W0B_ROWS, _S9W0B_IDEAL)),
+    "S9W1": (WaveData("S9W1A", _S9W1A_ROWS, _S9W1A_IDEAL),
+             WaveData("S9W1B", _S9W1B_ROWS, _S9W1B_IDEAL)),
+    "S9W2": (WaveData("S9W2A", _S9W2A_ROWS, _S9W2A_IDEAL),
+             WaveData("S9W2B", _S9W2B_ROWS, _S9W2B_IDEAL)),
+    "S9W3": (WaveData("S9W3A", _S9W3A_ROWS, _S9W3A_IDEAL),
+             WaveData("S9W3B", _S9W3B_ROWS, _S9W3B_IDEAL)),
+    # Stage 10
+    "S10W0": (WaveData("S10W0A", _S10W0A_ROWS, _S10W0A_IDEAL),
+              WaveData("S10W0B", _S10W0B_ROWS, _S10W0B_IDEAL)),
+    "S10W1": (WaveData("S10W1A", _S10W1A_ROWS, _S10W1A_IDEAL),
+              WaveData("S10W1B", _S10W1B_ROWS, _S10W1B_IDEAL)),
+    "S10W2": (WaveData("S10W2A", _S10W2A_ROWS, _S10W2A_IDEAL),
+              WaveData("S10W2B", _S10W2B_ROWS, _S10W2B_IDEAL)),
+    "S10W3": (WaveData("S10W3A", _S10W3A_ROWS, _S10W3A_IDEAL),
+              WaveData("S10W3B", _S10W3B_ROWS, _S10W3B_IDEAL)),
+}
+
+# ---------------------------------------------------------------------------
+# STAGE_POOL_SLOTS — 10 stages × 4 wave slots each
+# ---------------------------------------------------------------------------
+
+STAGE_POOL_SLOTS: tuple[tuple[str, str, str, str], ...] = (
+    ("S1W0", "S1W1", "S1W2", "S1W3"),    # Stage 1
+    ("S2W0", "S2W1", "S2W2", "S2W3"),    # Stage 2
+    ("S3W0", "S3W1", "S3W2", "S3W3"),    # Stage 3
+    ("S4W0", "S4W1", "S4W2", "S4W3"),    # Stage 4
+    ("S5W0", "S5W1", "S5W2", "S5W3"),    # Stage 5
+    ("S6W0", "S6W1", "S6W2", "S6W3"),    # Stage 6
+    ("S7W0", "S7W1", "S7W2", "S7W3"),    # Stage 7
+    ("S8W0", "S8W1", "S8W2", "S8W3"),    # Stage 8
+    ("S9W0", "S9W1", "S9W2", "S9W3"),    # Stage 9
+    ("S10W0", "S10W1", "S10W2", "S10W3"),  # Stage 10
 )
 
 
-# ---------------------------------------------------------------------------
-# Four Stage-2 wave patterns — 3-row waves, clean A intro then F escalation
-# ---------------------------------------------------------------------------
-# Stage 2 ramps up density with a clean A introduction (W1), then escalates
-# ADVANTAGE/FORBIDDEN interplay from W2 onward.  Each wave has 3 rows (back,
-# middle, front).  Ideal-step counts assume efficient blast chaining on the
-# back row; the two dense front rows are captured individually.  Adding one
-# 7-NORMAL row costs 7×2 = 14 extra steps vs the equivalent 2-row Stage-1 version.
-# ---------------------------------------------------------------------------
+def select_all_waves(rng: _random.Random) -> tuple[tuple[WaveData, ...], ...]:
+    """Select one WaveData per slot for every stage.
 
-# Wave S2-1 — Clean A introduction.  ADVANTAGE at col 2 (off-centre); no
-# FORBIDDEN.  Teaches that blasting is a useful option without the hazard of
-# a FORBIDDEN cube.  The asymmetric A position differentiates this from Stage 1.
-# Blast A@col2: col1+col2+col3 = 3 steps.  Remaining back N: col0,col4,col5,col6 = 4×2.
-# Optimal: 3 (ADV+detonate) + 4×2 (remaining back N) + 7×2 (mid) + 7×2 (front) = 39.
-_S2W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _A, _N, _N, _N, _N),   # row 0 (back)   — 6 NORMAL + 1 ADVANTAGE
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7 NORMAL
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7 NORMAL
-)
-_S2W1_IDEAL: int = 39
-
-# Wave S2-2 — Two ADVANTAGE flanking a centre FORBIDDEN (back row); two
-# dense rows follow.  Both ADV blasts sweep the outer halves of the back row.
-# Optimal: 2×3 (ADV+detonate) + 2×2 (remaining back N) + 7×2 (mid) + 7×2 (front) = 32.
-_S2W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _A, _N),   # row 0 (back)   — 4 NORMAL + 2 ADVANTAGE + 1 FORBIDDEN
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7 NORMAL
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7 NORMAL
-)
-_S2W2_IDEAL: int = 32
-
-# Wave S2-3 — Three ADVANTAGE spread across the back row; each blast sweeps
-# its ±1 neighbours, covering all 4 inter-A Normals.  Two dense rows follow.
-# Blast A@col1,col3,col5: 3×3=9 steps; all back-row N caught in blasts (0 remaining).
-# Optimal: 3×3 (ADV+detonate) + 0 remaining back N + 7×2 (mid) + 7×2 (front) = 37.
-_S2W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _A, _N, _A, _N),   # row 0 (back)   — 4 NORMAL + 3 ADVANTAGE
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7 NORMAL
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7 NORMAL
-)
-_S2W3_IDEAL: int = 37
-
-# Wave S2-4 — Full 3-row challenge.  ADVANTAGE at corners with two FORBIDDEN
-# in the middle (back row); two dense rows follow.  Corner ADV blasts each
-# catch 1 flanking NORMAL; col 3 NORMAL and both dense rows captured individually.
-# Optimal: 2×3 (ADV+detonate) + 1×2 (col 3 N) + 7×2 (mid) + 7×2 (front) = 36.
-_S2W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _F, _N, _A),   # row 0 (back)   — 3 NORMAL + 2 ADVANTAGE + 2 FORBIDDEN
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7 NORMAL
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7 NORMAL
-)
-_S2W4_IDEAL: int = 36
+    Returns a tuple of 10 stage-wave tuples. Each inner tuple has 4 WaveData
+    objects, one per wave slot, randomly selected from the slot's pool.
+    Called once at game start; the selection is fixed for the entire run.
+    The caller passes an explicit rng (random.Random) so tests can seed it.
+    """
+    result: list[tuple[WaveData, ...]] = []
+    assert len(STAGE_POOL_SLOTS) == 10, "STAGE_POOL_SLOTS must have 10 entries"
+    for stage_slots in STAGE_POOL_SLOTS:
+        stage_waves: list[WaveData] = []
+        for pool_key in stage_slots:
+            pool = WAVE_POOLS[pool_key]
+            assert len(pool) >= 1, f"pool {pool_key!r} is empty"
+            stage_waves.append(rng.choice(pool))
+        assert len(stage_waves) == 4, f"stage must have 4 waves, got {len(stage_waves)}"
+        result.append(tuple(stage_waves))
+    assert len(result) == 10, "select_all_waves must return 10 stage-wave tuples"
+    return tuple(result)
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 wave sequence — 4 waves in order
+# STAGES: backward-compat tuple using the A-variant waves only.
+# Used by code that hasn't been updated to use select_all_waves yet.
+# Will be removed once all callers switch to select_all_waves.
 # ---------------------------------------------------------------------------
 
-STAGE_2_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S2W1_ROWS, _S2W1_IDEAL),
-    WaveData(_S2W2_ROWS, _S2W2_IDEAL),
-    WaveData(_S2W3_ROWS, _S2W3_IDEAL),
-    WaveData(_S2W4_ROWS, _S2W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 3 — 4 waves × 3 rows × 7 cols  (same packing as Stage 2)
-# ---------------------------------------------------------------------------
-# Same grid width and row count as Stage 2 but harder patterns.  W1 introduces
-# FORBIDDEN at the grid edges (cols 0 & 6) with a safe centre A at col 3.
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Stage 3 wave data — 3 rows × 7 cols  (same grid as Stage 2, harder patterns)
-# ---------------------------------------------------------------------------
-# W1 has edge F + centre A; FORBIDDEN spreads into the middle row from Wave 3
-# onward, and Wave 4 chains ADVANTAGE blasts in all rows.
-# Ideal steps: 35 → 30 → 28 → 19  (decreasing = harder routing each wave).
-# ---------------------------------------------------------------------------
-
-# S3-W1 — F at cols 0 & 6 (grid edges), A at col 3 (centre); two dense NORMAL rows.
-# Teaches that FORBIDDEN at the edge can resemble a Normal cube from a distance.
-# Blast safety: |3-0|=3 ✓, |3-6|=3 ✓.
-# Row 0: A@3→N@2,N@4 (3); N@1,N@5 individual (2×2=4) → 7.
-# Rows 1–2: 7N each. ideal = 7+14+14 = 35.
-_S3W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _N, _A, _N, _N, _F),   # row 0 (back)   — 4N + 1A + 2F
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (middle) — 7N
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7N
-)
-_S3W1_IDEAL: int = 35
-
-# S3-W2 — Flanking A + centre F in back; symmetric inner F in middle.
-# Row 0: A@1→N@0,N@2; A@5→N@4,N@6; F@3 falls. 2×3=6.
-# Row 1: 5N+2F. 5×2=10.  Row 2: 7N. ideal = 6+10+14 = 30.
-_S3W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _A, _N),   # row 0 (back)   — 4N + 2A + 1F
-    (_N, _N, _F, _N, _F, _N, _N),   # row 1 (middle) — 5N + 2F
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7N
-)
-_S3W2_IDEAL: int = 30
-
-# S3-W3 — Corner A + inner F in back; flanking A in middle (clears all).
-# Row 0: 2×3+1×2=8.  Row 1: A@1→N@0,N@2; A@5→N@4,N@6; F@3 falls. 2×3=6.
-# Row 2: 7N. ideal = 8+6+14 = 28.
-_S3W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _F, _N, _A),   # row 0 (back)   — 3N + 2A + 2F
-    (_N, _A, _N, _F, _N, _A, _N),   # row 1 (middle) — 4N + 2A + 1F
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (front)  — 7N
-)
-_S3W3_IDEAL: int = 28
-
-# S3-W4 — FORBIDDEN in all rows; double-A blast in back and front clears all N.
-# Row 0: F,A@2,A@4,F; A@2→N@1,N@3; A@4→N@5; 2×3=6.
-# Row 1: A@3→N@2,N@4; N@0,N@6 individual; F@1,F@5 fall. 3+2×2=7.
-# Row 2: same as row 0. 2×3=6. ideal = 6+7+6 = 19.
-_S3W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _A, _N, _F),   # row 0 (back)   — 3N + 2A + 2F
-    (_N, _F, _N, _A, _N, _F, _N),   # row 1 (middle) — 4N + 1A + 2F
-    (_F, _N, _A, _N, _A, _N, _F),   # row 2 (front)  — 3N + 2A + 2F
-)
-_S3W4_IDEAL: int = 19
-
-# ---------------------------------------------------------------------------
-# Stage 3 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_3_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S3W1_ROWS, _S3W1_IDEAL),
-    WaveData(_S3W2_ROWS, _S3W2_IDEAL),
-    WaveData(_S3W3_ROWS, _S3W3_IDEAL),
-    WaveData(_S3W4_ROWS, _S3W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 4 wave data — 4 rows × 7 cols
-# ---------------------------------------------------------------------------
-# A fourth row per wave adds 14 more NORMAL captures.  FORBIDDEN spreads into
-# the middle rows; the final wave chains double-A blasts in every row.
-# Ideal steps: 51 → 44 → 42 → 33  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S4-W1 — A at col 1 (left-skewed), gap at col 3, three dense Normal rows.
-# Teaches off-centre blasting; col-3 gap makes the asymmetry legible.
-# Row 0: A@1→N@0,N@2 (3); N@4,N@5,N@6 individual (3×2=6) → 9.
-# Rows 1–3: 7N each. ideal = 9+14+14+14 = 51.
-_S4W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _X, _N, _N, _N),   # row 0 (back)   — 5N + 1A  (gap at col 3)
-    (_N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 7N
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 7N
-    (_N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 7N
-)
-_S4W1_IDEAL: int = 51
-
-# S4-W2 — Flanking A + centre F in back; symmetric inner F in mid-1.
-# Row 0: 2×3=6.  Row 1: 5×2=10.  Rows 2–3: 14 each. ideal = 6+10+14+14 = 44.
-_S4W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _A, _N),   # row 0 (back)   — 4N + 2A + 1F
-    (_N, _N, _F, _N, _F, _N, _N),   # row 1 (mid 1)  — 5N + 2F
-    (_N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 7N
-    (_N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 7N
-)
-_S4W2_IDEAL: int = 44
-
-# S4-W3 — Corner A + inner F in back; symmetric F pairs in mid rows.
-# Row 0: 2×3+1×2=8.  Row 1: 5×2=10.  Row 2: 5×2=10.  Row 3: 7×2=14.
-# ideal = 8+10+10+14 = 42.
-_S4W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _F, _N, _A),   # row 0 (back)   — 3N + 2A + 2F
-    (_N, _N, _F, _N, _F, _N, _N),   # row 1 (mid 1)  — 5N + 2F
-    (_N, _F, _N, _N, _N, _F, _N),   # row 2 (mid 2)  — 5N + 2F
-    (_N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 7N
-)
-_S4W3_IDEAL: int = 42
-
-# S4-W4 — Double-A blast in back + mid-1; F throughout; centre A in front.
-# Row 0: F,A@2,A@4,F — 2×3=6 (all N cleared by blasts).
-# Row 1: A@1→N@0,N@2; A@5→N@4,N@6; F@3 falls. 2×3=6.
-# Row 2: 5×2=10.  Row 3: A@3→N@2,N@4; 6 individual N. 3+4×2=11.
-# ideal = 6+6+10+11 = 33.
-_S4W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _A, _N, _F),   # row 0 (back)   — 3N + 2A + 2F
-    (_N, _A, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 1F
-    (_N, _N, _F, _N, _F, _N, _N),   # row 2 (mid 2)  — 5N + 2F
-    (_N, _N, _N, _A, _N, _N, _N),   # row 3 (front)  — 6N + 1A
-)
-_S4W4_IDEAL: int = 33
-
-# ---------------------------------------------------------------------------
-# Stage 4 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_4_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S4W1_ROWS, _S4W1_IDEAL),
-    WaveData(_S4W2_ROWS, _S4W2_IDEAL),
-    WaveData(_S4W3_ROWS, _S4W3_IDEAL),
-    WaveData(_S4W4_ROWS, _S4W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 5 wave data — 4 rows × 9 cols  (grid widens to 9 for the first time)
-# ---------------------------------------------------------------------------
-# Player spawn moves to col 4 (grid.width//2). Camera centre shifts to x=4.
-# Ideal steps: 66 → 58 → 50 → 41  (decreasing).
-# Row-width aliases for clarity: cols are 0–8.
-# ---------------------------------------------------------------------------
-
-# S5-W1 — Dual A at cols 2 & 6, Normal fill; introduces chain detonation.
-# Teaches the wider grid by showing both flanks can be blasted in one round.
-# Row 0: A@2→N@1,N@3 (3); A@6→N@5,N@7 (3); N@0,N@4,N@8 individual (3×2=6) → 12.
-# Rows 1–3: 9N each. ideal = 12+18+18+18 = 66.
-_S5W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _A, _N, _N, _N, _A, _N, _N),   # row 0 (back)   — 7N + 2A
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 9N
-)
-_S5W1_IDEAL: int = 66
-
-# S5-W2 — Flanking A pair + inner F in back; symmetric inner F in mid-1.
-# Row 0: A@1→N@0,N@2; A@7→N@6,N@8; F@4 (|1-4|=3 ✓, |7-4|=3 ✓); N@3 individual.
-# 2×3+1×2=8.  Row 1: 7N+2F, 7×2=14.  Rows 2–3: 9N. ideal = 8+14+18+18 = 58.
-_S5W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _N, _F, _N, _N, _A, _N),   # row 0 (back)   — 7N + 2A + 1F (N@3 indiv.)
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 1 (mid 1)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 9N
-)
-_S5W2_IDEAL: int = 58
-
-# S5-W3 — Corner A + inner F in back; flanking A + inner F in mid-1.
-# Row 0: A@0→N@1; A@8→N@7; F@2,F@6 (|0-2|=2 ✓, |8-6|=2 ✓); N@3,N@4,N@5 indiv.
-# 2×3+3×2=12.
-# Row 1: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 (|1-3|=2 ✓, |7-5|=2 ✓) fall. 2×3=6.
-# Row 2: 7N+2F, 7×2=14.  Row 3: 9N. ideal = 12+6+14+18 = 50.
-_S5W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _F, _N, _A),   # row 0 (back)   — 5N + 2A + 2F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (front)  — 9N
-)
-_S5W3_IDEAL: int = 50
-
-# S5-W4 — Dense F; double-A blasts in back + mid-1; F flanking in front.
-# Row 0: F,A@2,F@4,A@6,F — A@2→N@1,N@3; A@6→N@5,N@7; 2×3=6.
-# Row 1: A@3→N@2,N@4; A@5→N@6; F@1,F@7 fall; N@0,N@8 indiv. 2×3+2×2=10.
-# Row 2: 7N+2F, 7×2=14.
-# Row 3: F,A@4,F; A@4→N@3,N@5; N@1,N@2,N@6,N@7 indiv. 3+4×2=11.
-# ideal = 6+10+14+11 = 41.
-_S5W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _A, _N, _F),   # row 0 (back)   — 4N + 2A + 3F
-    (_N, _F, _N, _A, _N, _A, _N, _F, _N),   # row 1 (mid 1)  — 5N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_F, _N, _N, _N, _A, _N, _N, _N, _F),   # row 3 (front)  — 5N + 1A + 2F
-)
-_S5W4_IDEAL: int = 41
-
-# ---------------------------------------------------------------------------
-# Stage 5 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_5_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S5W1_ROWS, _S5W1_IDEAL),
-    WaveData(_S5W2_ROWS, _S5W2_IDEAL),
-    WaveData(_S5W3_ROWS, _S5W3_IDEAL),
-    WaveData(_S5W4_ROWS, _S5W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 6 wave data — 5 rows × 9 cols
-# ---------------------------------------------------------------------------
-# Five rows per wave versus Stage 5's four adds 18 more cubes.  FORBIDDEN
-# density escalates in later waves to force tighter blast routing.
-# Ideal steps: 82 → 74 → 68 → 62  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S6-W1 — F at col 4 (centre), A flanking at cols 1 & 7; forbidden trap opener.
-# F@4 sits between two symmetric A blasts — player must detonate carefully.
-# A@1 and A@7 each 3 cols from F@4 (|1-4|=3 ✓, |7-4|=3 ✓ — blast safe).
-# Row 0: A@1→N@0,N@2 (3); A@7→N@6,N@8 (3); N@3,N@5 individual (2×2=4) → 10.
-# Rows 1–4: 9N each. ideal = 10+18+18+18+18 = 82.
-_S6W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _N, _F, _N, _N, _A, _N),   # row 0 (back)   — 5N + 2A + 1F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S6W1_IDEAL: int = 82
-
-# S6-W2 — Flanking A + inner F in back; symmetric inner F in mid-1.
-# Row 0: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 1: 7N+2F. 7×2=14.  Rows 2–4: 9N each. ideal = 6+14+18+18+18 = 74.
-_S6W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 0 (back)   — 4N + 2A + 2F
-    (_N, _N, _N, _F, _N, _F, _N, _N, _N),   # row 1 (mid 1)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S6W2_IDEAL: int = 74
-
-# S6-W3 — Corner A + inner F in back; flanking A in mid-1; F in mid-2.
-# Row 0: A@0→N@1; A@8→N@7; F@2,F@6; N@3,N@4,N@5 indiv. 2×3+3×2=12.
-# Row 1: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 2: 7×2=14.  Rows 3–4: 9N. ideal = 12+6+14+18+18 = 68.
-_S6W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _F, _N, _A),   # row 0 (back)   — 5N + 2A + 2F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S6W3_IDEAL: int = 68
-
-# S6-W4 — Dense F throughout; double-A clears back + mid-1; F in mid rows.
-# Row 0: F,A@2,F@4,A@6,F — 2×3=6.
-# Row 1: A@3→N@2,N@4; A@5→N@6; N@0,N@8 indiv; F@1,F@7 fall. 2×3+2×2=10.
-# Row 2: 7×2=14.  Row 3: 7×2=14.  Row 4: 9N. ideal = 6+10+14+14+18 = 62.
-_S6W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _A, _N, _F),   # row 0 (back)   — 4N + 2A + 3F
-    (_N, _F, _N, _A, _N, _A, _N, _F, _N),   # row 1 (mid 1)  — 5N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_N, _N, _N, _F, _N, _F, _N, _N, _N),   # row 3 (mid 3)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S6W4_IDEAL: int = 62
-
-# ---------------------------------------------------------------------------
-# Stage 6 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_6_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S6W1_ROWS, _S6W1_IDEAL),
-    WaveData(_S6W2_ROWS, _S6W2_IDEAL),
-    WaveData(_S6W3_ROWS, _S6W3_IDEAL),
-    WaveData(_S6W4_ROWS, _S6W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 7 wave data — 5 rows × 9 cols  (same grid as Stage 6, harder patterns)
-# ---------------------------------------------------------------------------
-# W1 opens with flanking FORBIDDEN (no A shortcut) — the player must clear
-# the back row without blast help.  Escalates to dense F in every row by W4.
-# Ideal steps: 86 → 74 → 64 → 52  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S7-W1 — F at cols 1 & 7, rest Normal; no A shortcut in the back row.
-# Player cannot blast — every back-row Normal must be captured individually.
-# F@1 and F@7 fall off the edge; 7 Normal remain in the back row.
-# Row 0: 7×2=14 (F fall, no blast). Rows 1–4: 9N each. ideal = 14+18+18+18+18 = 86.
-_S7W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _F, _N, _N, _N, _N, _N, _F, _N),   # row 0 (back)   — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S7W1_IDEAL: int = 86
-
-# S7-W2 — Flanking A + inner F clears back; F in mid-1.
-# Row 0: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 1: 7×2=14.  Rows 2–4: 9N. ideal = 6+14+18+18+18 = 74.
-_S7W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 0 (back)   — 4N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 1 (mid 1)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S7W2_IDEAL: int = 74
-
-# S7-W3 — Corner A in back; flanking A in mid-1; F spreading into mid-2/3.
-# Row 0: A@0→N@1; A@8→N@7; N@3,N@4,N@5 indiv; F@2,F@6. 2×3+3×2=12.
-# Row 1: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 2: 7×2=14.  Row 3: 7×2=14.  Row 4: 9N. ideal = 12+6+14+14+18 = 64.
-# (N.B. 64 keeps a clear gap from W2=74 and W4=52.)
-_S7W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _F, _N, _A),   # row 0 (back)   — 5N + 2A + 2F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_N, _N, _N, _F, _N, _F, _N, _N, _N),   # row 3 (mid 3)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (front)  — 9N
-)
-_S7W3_IDEAL: int = 64
-
-# S7-W4 — Dense F; double-A blasts in back + mid-1; A flanked by F in mid-2.
-# Row 0: F,A@2,F@4,A@6,F — 2×3=6.
-# Row 1: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 2: A@4→N@3,N@5; N@1,N@2,N@6,N@7 indiv; F@0,F@8 fall. 3+4×2=11.
-# Row 3: 7×2=14.  Row 4: centre A. 3+6×2=15.
-# ideal = 6+6+11+14+15 = 52.
-_S7W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _A, _N, _F),   # row 0 (back)   — 4N + 2A + 3F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_F, _N, _N, _N, _A, _N, _N, _N, _F),   # row 2 (mid 2)  — 5N + 1A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 3 (mid 3)  — 7N + 2F
-    (_N, _N, _N, _N, _A, _N, _N, _N, _N),   # row 4 (front)  — 8N + 1A
-)
-_S7W4_IDEAL: int = 52
-
-# ---------------------------------------------------------------------------
-# Stage 7 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_7_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S7W1_ROWS, _S7W1_IDEAL),
-    WaveData(_S7W2_ROWS, _S7W2_IDEAL),
-    WaveData(_S7W3_ROWS, _S7W3_IDEAL),
-    WaveData(_S7W4_ROWS, _S7W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 8 wave data — 6 rows × 9 cols
-# ---------------------------------------------------------------------------
-# Six rows pack the deepest 9-wide wall. Ideal-step values are high because
-# there are many NORMAL cubes — the test is sustained pace under corner control.
-# Ideal steps: 107 → 96 → 90 → 76  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S8-W1 — A at col 0 (far-left corner); five dense Normal rows.
-# Corner A is less efficient: blast only catches N@1 (no left neighbour).
-# Teaches left-edge positioning and the cost of uncentred ADVANTAGE cubes.
-# Row 0: A@0→N@1 (3); N@2..N@8 individual (7×2=14) → 17.
-# Rows 1–5: 9N. ideal = 17+18+18+18+18+18 = 107.
-_S8W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _N, _N, _N, _N, _N, _N, _N),   # row 0 (back)   — 8N + 1A  (A at col 0)
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (mid 4)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 5 (front)  — 9N
-)
-_S8W1_IDEAL: int = 107
-
-# S8-W2 — Flanking A + inner F clears back; five dense rows.
-# Row 0: 2×3=6.  Rows 1–5: 9N. ideal = 6+18×5 = 96.
-_S8W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 0 (back)   — 4N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 1 (mid 1)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (mid 4)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 5 (front)  — 9N
-)
-_S8W2_IDEAL: int = 96
-
-# S8-W3 — Corner A in back; flanking A in mid-1; four dense rows.
-# Row 0: 2×3+3×2=12.  Row 1: 2×3=6.  Rows 2–5: 9N. ideal = 12+6+18+18+18+18 = 90.
-_S8W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _F, _N, _A),   # row 0 (back)   — 5N + 2A + 2F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 2 (mid 2)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 3 (mid 3)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (mid 4)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 5 (front)  — 9N
-)
-_S8W3_IDEAL: int = 90
-
-# S8-W4 — Double-A blasts clear back + mid-1; F spreads into mid-2 and mid-3.
-# Row 0: F,A@2,F@4,A@6,F — 2×3=6.
-# Row 1: A@1→N@0,N@2; A@7→N@6,N@8; F@3,F@5 fall. 2×3=6.
-# Row 2: 7×2=14.  Row 3: 7×2=14.  Rows 4–5: 9N. ideal = 6+6+14+14+18+18 = 76.
-# Corrected ideal: using 7N+2F twice = 14 each.
-_S8W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _A, _N, _F),   # row 0 (back)   — 4N + 2A + 3F
-    (_N, _A, _N, _F, _N, _F, _N, _A, _N),   # row 1 (mid 1)  — 4N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _F, _N, _N),   # row 2 (mid 2)  — 7N + 2F
-    (_N, _N, _N, _F, _N, _F, _N, _N, _N),   # row 3 (mid 3)  — 7N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 4 (mid 4)  — 9N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N),   # row 5 (front)  — 9N
-)
-_S8W4_IDEAL: int = 76
-
-# ---------------------------------------------------------------------------
-# Stage 8 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_8_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S8W1_ROWS, _S8W1_IDEAL),
-    WaveData(_S8W2_ROWS, _S8W2_IDEAL),
-    WaveData(_S8W3_ROWS, _S8W3_IDEAL),
-    WaveData(_S8W4_ROWS, _S8W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 9 wave data — 6 rows × 11 cols  (grid widens to 11)
-# ---------------------------------------------------------------------------
-# Player spawn moves to col 5.  Camera centre shifts to x=5.  The wider grid
-# means dense NORMAL rows cost 11×2=22 steps each.  High ideal-step counts
-# reflect pace, not complexity — later waves introduce F to reduce N targets.
-# Ideal steps: 125 → 120 → 110 → 92  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S9-W1 — F flanking at cols 1 & 9, A at col 5; wide grid with lethal edges.
-# F@1 and F@9 sit just one tile from the grid edge — easy to misread as Normal.
-# A@5 each 4 cols from both F (|5-1|=4 ✓, |5-9|=4 ✓ — blast safe).
-# Row 0: A@5→N@4,N@6 (3); N@0,N@2,N@3,N@7,N@8,N@10 individual (6×2=12) → 15.
-# Rows 1–5: 11N. ideal = 15+22×5 = 125.
-_S9W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _F, _N, _N, _N, _A, _N, _N, _N, _F, _N),  # row 0 (back)  — 8N + 1A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 1 (mid 1) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (front) — 11N
-)
-_S9W1_IDEAL: int = 125
-
-# S9-W2 — Flanking A pair + inner F in back; five dense rows.
-# Row 0: A@1→N@0,N@2; A@9→N@8,N@10; F@4,F@6 (|1-4|=3 ✓, |9-6|=3 ✓); N@3,N@7 indiv.
-# 2×3+2×2=10.  Rows 1–5: 11N. ideal = 10+22×5 = 120.
-_S9W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),  # row 0 (back)  — 7N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 1 (mid 1) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (front) — 11N
-)
-_S9W2_IDEAL: int = 120
-
-# S9-W3 — Corner A in back; flanking A in mid-1; four dense rows.
-# Row 0: A@0→N@1; A@10→N@9; F@2,F@8 (|0-2|=2 ✓, |10-8|=2 ✓); N@3,N@4,N@5,N@6,N@7 indiv.
-# 2×3+5×2=16.
-# Row 1: A@2→N@1,N@3; A@8→N@7,N@9; F@4,F@6 (|2-4|=2 ✓, |8-6|=2 ✓) fall. 2×3=6.
-# Rows 2–5: 11N. ideal = 16+6+22+22+22+22 = 110.
-_S9W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),  # row 0 (back)  — 7N + 2A + 2F
-    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),  # row 1 (mid 1) — 5N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (front) — 11N
-)
-_S9W3_IDEAL: int = 110
-
-# S9-W4 — Dense F; double-A blasts in back + mid-1; F in mid-2 + mid-3.
-# Row 0: F,A@2,F@4,F@6,A@8,F — A@2→N@1,N@3; A@8→N@7,N@9; 2×3=6.
-# Row 1: same pattern as S9-W3 row 1. 2×3=6.
-# Row 2: 9N+2F, 9×2=18.  Row 3: 9N+2F, 9×2=18.
-# Rows 4–5: 11N. ideal = 6+6+18+18+22+22 = 92.
-_S9W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),  # row 0 (back)  — 4N + 2A + 4F
-    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),  # row 1 (mid 1) — 5N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),  # row 2 (mid 2) — 9N + 2F
-    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),  # row 3 (mid 3) — 9N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (front) — 11N
-)
-_S9W4_IDEAL: int = 92
-
-# ---------------------------------------------------------------------------
-# Stage 9 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_9_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S9W1_ROWS, _S9W1_IDEAL),
-    WaveData(_S9W2_ROWS, _S9W2_IDEAL),
-    WaveData(_S9W3_ROWS, _S9W3_IDEAL),
-    WaveData(_S9W4_ROWS, _S9W4_IDEAL),
-)
-
-
-# ---------------------------------------------------------------------------
-# Stage 10 wave data — 7 rows × 11 cols  (maximum depth and width)
-# ---------------------------------------------------------------------------
-# Hardest stage: 7-row waves on an 11-wide grid. W1 opens with a triple-A
-# chain that sweeps all three zones; later waves introduce F for tight routing.
-# Ideal steps: 145 → 142 → 132 → 114  (decreasing).
-# ---------------------------------------------------------------------------
-
-# S10-W1 — Triple A at cols 2, 5, 8; chain-detonate opener across full width.
-# Three evenly-spaced A cubes each sweep their ±1 zone, leaving only corners.
-# A@2 and A@8 are each 3 cols from A@5 (|2-5|=3, |8-5|=3 — no F so safe).
-# Row 0: A@2→N@1,N@3 (3); A@5→N@4,N@6 (3); A@8→N@7,N@9 (3); N@0,N@10 (2×2=4) → 13.
-# Rows 1–6: 11N. ideal = 13+22×6 = 145.
-_S10W1_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _A, _N, _N, _A, _N, _N, _A, _N, _N),  # row 0 (back)  — 8N + 3A
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 1 (mid 1) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (mid 5) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 6 (front) — 11N
-)
-_S10W1_IDEAL: int = 145
-
-# S10-W2 — Flanking A pair + inner F in back; six dense rows.
-# Row 0: 2×3+2×2=10.  Rows 1–6: 11N. ideal = 10+22×6 = 142.
-_S10W2_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),  # row 0 (back)  — 7N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 1 (mid 1) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (mid 5) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 6 (front) — 11N
-)
-_S10W2_IDEAL: int = 142
-
-# S10-W3 — Corner A in back; flanking A in mid-1; five dense rows.
-# Row 0: 2×3+5×2=16.  Row 1: 2×3=6.  Rows 2–6: 11N. ideal = 16+6+22×5 = 132.
-_S10W3_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),  # row 0 (back)  — 7N + 2A + 2F
-    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),  # row 1 (mid 1) — 5N + 2A + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 2 (mid 2) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 3 (mid 3) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (mid 5) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 6 (front) — 11N
-)
-_S10W3_IDEAL: int = 132
-
-# S10-W4 — Dense F; double-A blasts clear back + mid-1; F in mid-2/3.
-# Row 0: F,A@2,F@4,F@6,A@8,F — 2×3=6.
-# Row 1: same 11-wide flanking A pattern. 2×3=6.
-# Row 2: 9N+2F, 9×2=18.  Row 3: 9N+2F, 9×2=18.  Rows 4–6: 11N.
-# ideal = 6+6+18+18+22+22+22 = 114.
-_S10W4_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),  # row 0 (back)  — 4N + 2A + 4F
-    (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),  # row 1 (mid 1) — 5N + 2A + 2F
-    (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),  # row 2 (mid 2) — 9N + 2F
-    (_N, _N, _N, _F, _N, _N, _F, _N, _N, _N, _N),  # row 3 (mid 3) — 9N + 2F
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 4 (mid 4) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 5 (mid 5) — 11N
-    (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),  # row 6 (front) — 11N
-)
-_S10W4_IDEAL: int = 114
-
-# ---------------------------------------------------------------------------
-# Stage 10 wave sequence
-# ---------------------------------------------------------------------------
-
-STAGE_10_WAVES: tuple[WaveData, ...] = (
-    WaveData(_S10W1_ROWS, _S10W1_IDEAL),
-    WaveData(_S10W2_ROWS, _S10W2_IDEAL),
-    WaveData(_S10W3_ROWS, _S10W3_IDEAL),
-    WaveData(_S10W4_ROWS, _S10W4_IDEAL),
-)
-
-# ---------------------------------------------------------------------------
-# Master stage table — indexed by stage_index (0-based)
-# ---------------------------------------------------------------------------
-
-STAGES: tuple[tuple[WaveData, ...], ...] = (
-    STAGE_1_WAVES,
-    STAGE_2_WAVES,
-    STAGE_3_WAVES,
-    STAGE_4_WAVES,
-    STAGE_5_WAVES,
-    STAGE_6_WAVES,
-    STAGE_7_WAVES,
-    STAGE_8_WAVES,
-    STAGE_9_WAVES,
-    STAGE_10_WAVES,
+STAGES: tuple[tuple[WaveData, ...], ...] = tuple(
+    tuple(WAVE_POOLS[slot][0] for slot in stage_slots)
+    for stage_slots in STAGE_POOL_SLOTS
 )

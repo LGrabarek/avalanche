@@ -128,7 +128,7 @@ from constants import (
 from effects import FlashEffects
 from grid_manager import GridManager
 from player import Player
-from wave_data import STAGES, WaveData
+from wave_data import STAGES, WaveData, select_all_waves
 from wave_manager import Cube, WaveManager
 
 
@@ -174,10 +174,21 @@ class GameManager:
         self._phase: GamePhase = GamePhase.WAVE_ACTIVE
         self._wave_penalty: int = 0      # Missed NORMAL/ADVANTAGE cubes during WAVE_ACTIVE.
         self._avalanche_penalty: int = 0  # Missed NORMAL/ADVANTAGE cubes during AVALANCHE.
-        # Wave progression state — populated by start_first_wave().
+        # Wave progression state — populated by start_game().
         self._waves: tuple[WaveData, ...] = ()
         self._wave_index: int = 0
         self._stage_index: int = 0       # 0-based index into STAGES master table.
+        # Full run selection: all 10 stages × 4 waves, chosen once per run by
+        # select_all_waves(). Populated by start_game(); each stage advance reads
+        # self._all_stage_waves[self._stage_index] rather than STAGES directly.
+        self._all_stage_waves: tuple[tuple[WaveData, ...], ...] = ()
+        # Crush-retry gate: True when the current wave had a player crush.
+        # On wave cleared, if this is True the wave is replayed; else advance.
+        self._wave_crushed: bool = False
+        # Retry display flag: True while the WAVE_RISING pause is a crush retry
+        # (cleared when _begin_wave fires so the actual replayed wave starts clean).
+        # Distinct from _wave_crushed, which is cleared before WAVE_RISING starts.
+        self._retry_pending: bool = False
         # z_back coordinate for each wave's back row — populated by
         # _spawn_all_waves_pending().  Index i matches self._waves[i].
         self._wave_z_starts: list[int] = []
@@ -267,6 +278,38 @@ class GameManager:
             "wave_front_z called before start_first_wave"
         )
         return self._wave_z_starts[0] - self._waves[0].row_count + 1
+
+    @property
+    def wave_code(self) -> str:
+        """Short code for the currently active wave, e.g. 'S3W2B'.
+
+        Returns '---' before the first wave is set (TITLE with empty wave list).
+        Used by the HUD to identify which pool variant the player is fighting.
+        """
+        if not self._waves or self._wave_index >= len(self._waves):
+            return "---"
+        return self._waves[self._wave_index].code
+
+    @property
+    def wave_crushed(self) -> bool:
+        """True while the current WAVE_ACTIVE/AVALANCHE phase had a player crush.
+
+        Cleared before WAVE_RISING starts (see _on_wave_cleared retry branch).
+        Use `retry_pending` to detect whether the current WAVE_RISING pause is
+        a retry — that flag stays True through the pause until _begin_wave fires.
+        """
+        return self._wave_crushed
+
+    @property
+    def retry_pending(self) -> bool:
+        """True during the WAVE_RISING pause that precedes a crush-retry wave.
+
+        Set at the same time _wave_crushed is cleared in _on_wave_cleared so
+        the retry state is visible during the rising pause.  Cleared in
+        _begin_wave when the replayed wave actually activates.  Use this in
+        overlays and HUD to communicate "same wave again" to the player.
+        """
+        return self._retry_pending
 
     @property
     def end_hold_ready(self) -> bool:
@@ -552,6 +595,7 @@ class GameManager:
         """Transition to AVALANCHE: squash the player, accelerate the wave."""
         self._phase = GamePhase.AVALANCHE
         self._had_avalanche = True  # disqualifies Perfect for this wave
+        self._wave_crushed = True   # gate: this wave must be replayed before advancing
         player.crush()
         wave.tick_interval = self._cur_avalanche_tick_interval
         self._grid.clear_mark()
@@ -758,6 +802,29 @@ class GameManager:
         # this only fires when the wave sequence is (re)initialised from scratch.
         player.position_near_wave(self.wave_front_z, PLAYER_INITIAL_WAVE_GAP)
 
+    def start_game(
+        self,
+        player: Player,
+        all_stage_waves: tuple[tuple[WaveData, ...], ...],
+    ) -> None:
+        """Store the full run's wave selection and enter the title screen.
+
+        Called from main.py at startup and from _do_restart on each replay.
+        Stores `all_stage_waves` (produced by select_all_waves) so every stage
+        transition reads chosen pool variants from self._all_stage_waves instead
+        of the static STAGES table.  Delegates to start_first_wave for Stage-1
+        wave initialisation and TITLE entry.
+
+        Raises ValueError if all_stage_waves is empty or Stage 1 has no waves.
+        """
+        if not all_stage_waves:
+            raise ValueError("all_stage_waves must not be empty")
+        if not all_stage_waves[0]:
+            raise ValueError("Stage 1 wave sequence must not be empty")
+        assert len(all_stage_waves) > 0, "all_stage_waves invariant double-check"
+        self._all_stage_waves = all_stage_waves
+        self.start_first_wave(player, all_stage_waves[0])
+
     def on_restart_key(self, player: Player) -> None:
         """Reset all game state and return to TITLE on any key during GAME_OVER/VICTORY.
 
@@ -798,8 +865,11 @@ class GameManager:
         if self._audio is not None:
             self._audio.play_wave_clear()   # brief fanfare as the new stage begins
         self._stage_index += 1
-        assert self._stage_index < len(STAGES), (
-            f"stage_index {self._stage_index} out of range [0, {len(STAGES)})"
+        # Use the run-wide pool selection if available; fall back to the static
+        # STAGES table for callers that bypass start_game (legacy / test paths).
+        stage_table = self._all_stage_waves if self._all_stage_waves else STAGES
+        assert self._stage_index < len(stage_table), (
+            f"stage_index {self._stage_index} out of range [0, {len(stage_table)})"
         )
         # Step 33: grid tile state (row deletions) and player X persist across
         # stage boundaries. Resize the grid to match the new stage's wave-pattern
@@ -813,6 +883,7 @@ class GameManager:
         self._wave_index = 0
         self._wave_penalty = 0
         self._avalanche_penalty = 0
+        self._wave_crushed = False        # no retry gate pending at stage start
         self._forbidden_captured = False
         self._had_avalanche = False
         self._player_steps = 0
@@ -820,7 +891,7 @@ class GameManager:
         self._perfect_display = False
         self._end_hold_elapsed = 0.0
         # Arm the new stage's wave list, spawn all waves as pending, start intro.
-        self._waves = STAGES[self._stage_index]
+        self._waves = stage_table[self._stage_index]
         self._spawn_all_waves_pending(player)
         # Safety clamp (Step 33 BLOCKER fix): if the player advanced deep into
         # Stage N's wave stack they could persist inside Stage N+1's wave 0.
@@ -832,14 +903,14 @@ class GameManager:
     def _do_restart(self, player: Player) -> None:
         """Full reset sequence shared by on_restart_key and on_menu_select (Restart).
 
-        Always restarts from Stage 1 (STAGES[0]) regardless of which stage the
-        player was on. Resets grid, wave, effects, and player in dependency
-        order (grid first so player.reset() finds a valid spawn tile), then
-        zeroes the manager's own fields, then enters TITLE via start_first_wave.
+        Draws a fresh pool selection via select_all_waves so each run sees a
+        different mix of A/B wave variants. Always restarts from Stage 1.
+        Resets grid, wave, effects, and player in dependency order (grid first
+        so player.reset() finds a valid spawn tile), then zeroes the manager's
+        own fields, then enters TITLE via start_game.
 
         The wave.reset_for_new_wave() call here clears stale cubes immediately
-        so none are rendered during the TITLE / WAVE_RISING screens. _spawn_wave
-        also calls it when the timer expires; the double call is intentional.
+        so none are rendered during the TITLE / WAVE_RISING screens.
         """
         assert len(STAGES) > 0, "STAGES must not be empty"
         self._grid.resize(STAGE_GRID_WIDTHS[0])   # full reset to Stage-1 width
@@ -848,7 +919,9 @@ class GameManager:
         self._effects.reset()            # clear flashes and shake
         player.reset()                   # teleport back to spawn
         self._reset_state()              # resets _stage_index to 0
-        self.start_first_wave(player, STAGES[0])
+        rng = random.Random(random.randrange(2**32))
+        all_stage_waves = select_all_waves(rng)
+        self.start_game(player, all_stage_waves)
 
     def _reset_state(self) -> None:
         """Zero every per-game field back to the same values as __init__.
@@ -864,6 +937,9 @@ class GameManager:
         self._waves = ()
         self._wave_index = 0
         self._stage_index = 0
+        self._all_stage_waves = ()     # cleared; start_game repopulates on restart
+        self._wave_crushed = False     # cleared; no retry gate pending on fresh start
+        self._retry_pending = False    # cleared; no retry pause active on fresh start
         self._wave_z_starts = []
         self._forbidden_captured = False
         self._had_avalanche = False
@@ -990,6 +1066,7 @@ class GameManager:
         self._wave_penalty = 0
         self._avalanche_penalty = 0
         self._perfect_display = False
+        self._retry_pending = False  # WAVE_RISING retry pause is over; wave is live
         # Restore player and set stage-correct tick speed.
         player.uncrush()
         self._wave.tick_interval = self._cur_tick_interval
@@ -1002,17 +1079,61 @@ class GameManager:
         )
         self._phase = GamePhase.WAVE_ACTIVE
 
+    def _respawn_current_wave(self, player: Player) -> None:
+        """Re-place cubes for the current wave so _begin_wave can activate them.
+
+        Called when a crushed wave must be replayed. The cubes that were created
+        at stage start for this wave index have already been cleared (avalanche
+        consumed them). This method places a fresh set of pending cubes at the
+        same z positions so _begin_wave → _activate_wave finds them.
+
+        The mirror decision is re-rolled so retries can look different from the
+        first attempt, giving the player a fair second look.
+        """
+        assert len(self._waves) > 0, "_respawn_current_wave called with empty waves"
+        assert 0 <= self._wave_index < len(self._waves), (
+            f"wave_index {self._wave_index} out of range"
+        )
+        assert len(self._wave_z_starts) > self._wave_index, (
+            "_respawn_current_wave called before z_starts were computed"
+        )
+        wave_data = self._waves[self._wave_index]
+        z_start = self._wave_z_starts[self._wave_index]
+        mirror = random.random() < 0.5
+        positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+        for gx, gz, cube_type in positions:
+            self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert self._wave.cube_count > 0, (
+            "_respawn_current_wave placed no cubes — wave data may be empty"
+        )
+
     def _on_wave_cleared(self, player: Player) -> None:
         """Apply Perfect bonus, restore row if earned, then advance to next wave.
 
-        Called when wave.cube_count reaches 0. Checks the three Perfect criteria:
-        no avalanche, no FORBIDDEN captured, no missed NORMAL/ADVANTAGE. On Perfect,
-        awards a step-efficiency bonus and restores one voided front row. Then either
-        spawns the next wave or transitions to VICTORY.
+        Called when wave.cube_count reaches 0. If the wave was crushed
+        (_wave_crushed is True), re-spawn the same wave for immediate replay —
+        the player cannot advance to the next wave until they clear this one
+        without being crushed. On a clean clear (no crush), checks the three
+        Perfect criteria, applies bonus/row restore, then advances.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
         if self._audio is not None:
             self._audio.play_wave_clear()
+        # --- Retry gate: crushed waves are replayed before advancing ----------
+        if self._wave_crushed:
+            # Clear the crush flag and set retry_pending so the WAVE_RISING
+            # banner can communicate "same wave again" to the player.
+            # _retry_pending stays True until _begin_wave clears it.
+            self._wave_crushed = False
+            self._retry_pending = True
+            player.uncrush()
+            self._grid.clear_mark()
+            self._perfect_display = False
+            self._respawn_current_wave(player)
+            self._wave_rising_timer = WAVE_RISING_DURATION
+            self._phase = GamePhase.WAVE_RISING
+            return
+        # --- Clean clear: apply Perfect bonus, then advance or finish ---------
         wave_data = self._waves[self._wave_index]
         is_perfect = (
             not self._had_avalanche
@@ -1030,7 +1151,8 @@ class GameManager:
         next_index = self._wave_index + 1
         if next_index >= len(self._waves):
             self._end_hold_elapsed = 0.0  # fresh countdown on end-screen entry
-            if self._stage_index >= len(STAGES) - 1:
+            total_stages = len(self._all_stage_waves) if self._all_stage_waves else len(STAGES)
+            if self._stage_index >= total_stages - 1:
                 # Final stage complete — compute I.Q. and enter VICTORY.
                 self._iq_score = self._calculate_final_iq()
                 self._phase = GamePhase.VICTORY

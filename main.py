@@ -6,6 +6,7 @@ Step 9A: Wave progression, Perfect bonus, I.Q. scoring, VICTORY overlay.
 
 import asyncio
 import math
+import random
 
 import pygame
 
@@ -55,7 +56,7 @@ from grid_manager import GridManager
 from hud import Hud
 from player import Player
 from renderer import ProjectedFace, Renderer
-from wave_data import STAGES
+from wave_data import select_all_waves
 from wave_manager import MAX_ACTIVE_CUBES, WaveManager
 
 # --- Tuning -------------------------------------------------------------------
@@ -426,7 +427,14 @@ def _draw_wave_rising_overlay(
     banner.fill((0, 0, 0, 160))
     _ = screen.blit(banner, (0, banner_y))
     text_y = banner_y + line_h // 2
-    if game.perfect_display:
+    if game.retry_pending:
+        # Crush-retry: show a prominent RETRY! in orange so the player knows
+        # this WAVE_RISING pause leads back to the same wave, not the next one.
+        retry_surf = big_font.render("RETRY!", True, (255, 140, 40))
+        retry_x = (SCREEN_WIDTH - retry_surf.get_width()) // 2
+        _ = screen.blit(retry_surf, (retry_x, text_y))
+        text_y += line_h
+    elif game.perfect_display:
         perf = big_font.render("PERFECT!", True, (255, 220, 50))
         perf_x = (SCREEN_WIDTH - perf.get_width()) // 2
         _ = screen.blit(perf, (perf_x, text_y))
@@ -630,7 +638,10 @@ async def main() -> None:
     wave = WaveManager()
     effects = FlashEffects()
     game = GameManager(grid, wave, effects, audio=audio)
-    game.start_first_wave(player, STAGES[0])
+    # Draw a fresh pool selection so each run sees a different mix of A/B
+    # wave variants.  The seed is unpredictable; _do_restart re-rolls it.
+    _rng = random.Random(random.randrange(2**32))
+    game.start_game(player, select_all_waves(_rng))
     hud = Hud(player, grid, wave, game)
 
     scene_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))

@@ -39,9 +39,9 @@ HUD_FIRST_LINE_Y: int = 10
 # front-row tiles (canvas height derived from SCREEN_HEIGHT at runtime).
 HUD_HINT_MARGIN_BOTTOM: int = 14
 
-# Surface cache bound: 4 stat labels + 1 hint label.
+# Surface cache bound: 5 stat labels + 1 hint label.
 # If a new HUD line is added, bump this constant accordingly.
-MAX_HUD_CACHE_ENTRIES: int = 5
+MAX_HUD_CACHE_ENTRIES: int = 6
 
 
 class Hud:
@@ -112,21 +112,23 @@ class Hud:
         screen: pygame.Surface,
         font: pygame.font.Font,
     ) -> None:
-        """Top-left stat block. 4 lines, line-height driven."""
+        """Top-left stat block. 5 lines, line-height driven."""
         mark_str = self._format_mark()
         stage_num = self._game.stage_index + 1
         wave_num = self._game.wave_index + 1
         wave_total = self._game.wave_count
         wave_str = f"{wave_num}/{wave_total}" if wave_total > 0 else "---"
+        retry_tag = "  [RETRY]" if self._game.retry_pending else ""
         stats: tuple[tuple[str, str], ...] = (
             ("score",   f"Score: {self._game.score}  Mark: {mark_str}"),
             ("penalty", f"Penalty: {self._game.wave_penalty}/{PENALTY_THRESHOLD}"),
             ("stage",   f"Stage: {stage_num}"),
             ("wave",    f"Wave: {wave_str}"),
+            ("code",    f"Code: {self._game.wave_code}{retry_tag}"),
         )
         # Rule-5 invariant: line count must match the fixed y-advance loop.
-        assert len(stats) == 4, (
-            f"HUD stat block expected 4 lines, got {len(stats)} — "
+        assert len(stats) == 5, (
+            f"HUD stat block expected 5 lines, got {len(stats)} — "
             "update the invariant if intentionally changing the layout"
         )
         for i, (label, text) in enumerate(stats):
