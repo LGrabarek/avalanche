@@ -1225,10 +1225,7 @@ class GameManager:
         for slot_key in slots[self._clean_clears:]:
             pool = WAVE_POOLS[slot_key]
             assert len(pool) >= 1, f"pool '{slot_key}' is empty"
-            variant_idx = 0 if random.random() < 0.5 else 1
-            assert len(pool) > variant_idx, (
-                f"pool '{slot_key}' has {len(pool)} variant(s); need >= 2"
-            )
+            variant_idx = random.randrange(len(pool))
             assert len(new_waves) < n_needed, "new_waves exceeded expected count"
             new_waves.append(pool[variant_idx])
         assert len(new_waves) == n_needed, (
@@ -1237,6 +1234,7 @@ class GameManager:
         self._waves = tuple(new_waves)
         self._wave_index = 0
         self._retry_pending = False     # clear [AGAIN] tag before STAGE_INTRO
+        self._perfect_display = False   # clear PERFECT! flag symmetrically with _retry_pending
         self._wave.reset_for_new_wave() # discard any stale pending cubes
         self._effects.reset()
         self._spawn_all_waves_pending(player)
