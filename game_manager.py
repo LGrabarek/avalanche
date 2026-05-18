@@ -190,6 +190,11 @@ class GameManager:
         # (cleared when _begin_wave fires so the actual replayed wave starts clean).
         # Distinct from _wave_crushed, which is cleared before WAVE_RISING starts.
         self._retry_pending: bool = False
+        # Post-rising reload flag: when True, the WAVE_RISING expiry calls
+        # _reload_remaining_waves (→ STAGE_INTRO) instead of _begin_wave.
+        # Set in _on_wave_cleared when the current batch is exhausted (last slot
+        # crushed or last slot cleaned with stage not yet complete).
+        self._post_rising_reload: bool = False
         # Stage-progress gate: counts clean clears (waves cleared without crush).
         # Stage ends when _clean_clears reaches len(_waves) (= 4). Carries over
         # across wave-batch reloads within the same stage; reset at stage boundary.
@@ -407,7 +412,11 @@ class GameManager:
             self._wave_rising_timer = max(0.0, self._wave_rising_timer - dt)
             assert self._wave_rising_timer >= 0.0, "wave rising timer went negative"
             if self._wave_rising_timer == 0.0:
-                self._begin_wave(player)
+                if self._post_rising_reload:
+                    self._post_rising_reload = False
+                    self._reload_remaining_waves(player)
+                else:
+                    self._begin_wave(player)
         elif self._phase in (
             GamePhase.GAME_OVER, GamePhase.VICTORY, GamePhase.STAGE_CLEAR,
         ):
@@ -912,6 +921,8 @@ class GameManager:
         self._wave_penalty = 0
         self._avalanche_penalty = 0
         self._wave_crushed = False        # no retry gate pending at stage start
+        self._retry_pending = False      # no AGAIN! banner pending at stage start
+        self._post_rising_reload = False  # no deferred reload pending at stage start
         self._clean_clears = 0           # fresh stage: no clean clears accumulated
         self._forbidden_captured = False
         self._had_avalanche = False
@@ -969,6 +980,7 @@ class GameManager:
         self._all_stage_waves = ()     # cleared; start_game repopulates on restart
         self._wave_crushed = False     # cleared; no retry gate pending on fresh start
         self._retry_pending = False    # cleared; no retry pause active on fresh start
+        self._post_rising_reload = False  # cleared; no deferred reload pending on fresh start
         self._clean_clears = 0        # cleared; no clean clears counted yet
         self._wave_z_starts = []
         self._forbidden_captured = False
@@ -1118,15 +1130,16 @@ class GameManager:
           _retry_pending is set (drives "AGAIN!" banner and [AGAIN] HUD tag).
           If a later slot exists, _wave_index advances and that pre-placed
           pending wave activates as-is — no respawn.  If this was the last
-          slot (no next pending wave), _respawn_current_slot re-picks a pool
-          variant so there is always a wave for the player to face.
+          slot (no next pending wave), _post_rising_reload is set so that
+          _reload_remaining_waves fires after the WAVE_RISING pause via
+          STAGE_INTRO with a fresh batch of all remaining needed waves.
 
         Clean path (_wave_crushed is False):
           Perfect criteria checked and bonus applied. _clean_clears incremented.
           Stage ends the moment _clean_clears reaches _waves_per_stage (= 4).
           Otherwise _wave_index advances. If the last slot was just cleaned but
-          the stage is not yet complete, _respawn_current_slot provides the next
-          wave from the same pool slot.
+          the stage is not yet complete, _post_rising_reload is set so that
+          _reload_remaining_waves fires after the WAVE_RISING pause.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
         player.uncrush()
@@ -1140,8 +1153,8 @@ class GameManager:
                 # Non-last slot: the next pre-placed pending wave becomes the retry.
                 self._wave_index = next_index
             else:
-                # Last slot: no pending wave waiting; respawn from pool.
-                self._respawn_current_slot()
+                # Last slot: no pending wave waiting; full reload after WAVE_RISING.
+                self._post_rising_reload = True
             self._wave_rising_timer = WAVE_RISING_DURATION
             self._phase = GamePhase.WAVE_RISING
             return
@@ -1172,61 +1185,64 @@ class GameManager:
             else:
                 self._phase = GamePhase.STAGE_CLEAR
             return
-        # Advance to the next slot; if the batch is exhausted, respawn last slot.
+        # Advance to the next slot; if the batch is exhausted, full reload after WAVE_RISING.
         self._wave_index += 1
         if self._wave_index >= len(self._waves):
+            # Keep wave_index valid so wave_code shows last slot's code during WAVE_RISING.
             self._wave_index = len(self._waves) - 1
-            self._respawn_current_slot()
+            self._post_rising_reload = True
         self._wave_rising_timer = WAVE_RISING_DURATION
         self._phase = GamePhase.WAVE_RISING
 
-    def _respawn_current_slot(self) -> None:
-        """Re-place cubes for the current wave slot from its pool.
+    def _reload_remaining_waves(self, player: Player) -> None:
+        """Spawn the remaining needed waves from pool and enter STAGE_INTRO.
 
-        Called from the crushed path of _on_wave_cleared. Picks a fresh A/B
-        variant from WAVE_POOLS for this stage × slot (re-rolled randomly so
-        the player may see a different pattern on retry), updates self._waves so
-        wave_code reflects the new selection, then spawns the variant's cubes as
-        pending at the same z position.
+        Called from the WAVE_RISING expiry path when _post_rising_reload is set
+        (cleared by the caller before this method runs).  Determines how many
+        clean clears remain (_waves_per_stage - _clean_clears) and picks fresh
+        A/B pool variants for those slots only: STAGE_POOL_SLOTS[stage][clean:].
 
-        Pending cubes for all later slots are left untouched — the player still
-        sees those waves sitting further back on the grid.
+        All existing cubes are discarded via reset_for_new_wave before
+        _spawn_all_waves_pending places the fresh batch, so there are no stale
+        pending rows left from the exhausted wave queue.
+
+        _retry_pending is cleared here (not in _begin_wave) so the [AGAIN] HUD
+        tag and AGAIN! banner are absent during the STAGE_INTRO animation itself.
         """
-        assert len(self._waves) > 0, "_respawn_current_slot called with empty waves"
-        assert 0 <= self._wave_index < len(self._waves), (
-            f"wave_index {self._wave_index} out of range"
-        )
         assert self._stage_index < len(STAGE_POOL_SLOTS), (
             f"stage_index {self._stage_index} out of range for STAGE_POOL_SLOTS"
         )
-        assert len(self._wave_z_starts) > self._wave_index, (
-            "_respawn_current_slot called before z_starts were computed"
+        slots = STAGE_POOL_SLOTS[self._stage_index]
+        n_needed = self._waves_per_stage - self._clean_clears
+        assert n_needed > 0, (
+            f"_reload_remaining_waves called with n_needed={n_needed} — "
+            "should not be called when stage is already complete"
         )
-        pool_key = STAGE_POOL_SLOTS[self._stage_index][self._wave_index]
-        pool = WAVE_POOLS[pool_key]
-        assert len(pool) >= 1, f"pool '{pool_key}' is empty"
-        variant_idx = 0 if random.random() < 0.5 else 1
-        assert len(pool) > variant_idx, (
-            f"pool '{pool_key}' has only {len(pool)} variant(s); need at least 2"
+        assert self._clean_clears < len(slots), (
+            f"_clean_clears {self._clean_clears} >= slot count {len(slots)}"
         )
-        wave_data = pool[variant_idx]
-        assert wave_data.row_count == self._waves[self._wave_index].row_count, (
-            f"retry variant row_count {wave_data.row_count} != slot original "
-            f"{self._waves[self._wave_index].row_count} — z_starts would be wrong"
+        new_waves: list[WaveData] = []
+        for slot_key in slots[self._clean_clears:]:
+            pool = WAVE_POOLS[slot_key]
+            assert len(pool) >= 1, f"pool '{slot_key}' is empty"
+            variant_idx = 0 if random.random() < 0.5 else 1
+            assert len(pool) > variant_idx, (
+                f"pool '{slot_key}' has {len(pool)} variant(s); need >= 2"
+            )
+            assert len(new_waves) < n_needed, "new_waves exceeded expected count"
+            new_waves.append(pool[variant_idx])
+        assert len(new_waves) == n_needed, (
+            f"expected {n_needed} new waves, built {len(new_waves)}"
         )
-        # Swap the WaveData so wave_code shows the new variant's identifier.
-        waves_list = list(self._waves)
-        waves_list[self._wave_index] = wave_data
-        self._waves = tuple(waves_list)
-        # Spawn the new variant as pending at the slot's pre-computed z position.
-        z_start = self._wave_z_starts[self._wave_index]
-        mirror = random.random() < 0.5
-        positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
-        for gx, gz, cube_type in positions:
-            self._wave.spawn_cube(gx, gz, cube_type, pending=True)
-        assert self._wave.cube_count > 0, (
-            "_respawn_current_slot placed no cubes — wave data may be empty"
-        )
+        self._waves = tuple(new_waves)
+        self._wave_index = 0
+        self._retry_pending = False     # clear [AGAIN] tag before STAGE_INTRO
+        self._wave.reset_for_new_wave() # discard any stale pending cubes
+        self._effects.reset()
+        self._spawn_all_waves_pending(player)
+        player.clamp_z_before_wave(self.wave_front_z)
+        self._intro_elapsed = 0.0
+        self._phase = GamePhase.STAGE_INTRO
 
     def _calc_perfect_bonus(self, actual: int, ideal: int) -> int:
         """Return the Perfect step-efficiency score bonus.
