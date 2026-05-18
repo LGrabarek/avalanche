@@ -836,7 +836,7 @@ class GameManager:
         self._waves = waves
         self._wave_index = 0
         self._phase = GamePhase.TITLE
-        self._spawn_all_waves_pending(player)
+        self._spawn_all_waves_pending()
         # Position player PLAYER_INITIAL_WAVE_GAP tiles below wave-0 front so
         # the opening gap is always exactly 6 clear rows regardless of PLAYER_SPAWN_Z.
         # Subsequent wave and stage transitions use the normal persistence logic;
@@ -936,7 +936,7 @@ class GameManager:
         self._end_hold_elapsed = 0.0
         # Arm the new stage's wave list, spawn all waves as pending, start intro.
         self._waves = stage_table[self._stage_index]
-        self._spawn_all_waves_pending(player)
+        self._spawn_all_waves_pending()
         # Safety clamp (Step 33 BLOCKER fix): if the player advanced deep into
         # Stage N's wave stack they could persist inside Stage N+1's wave 0.
         # Clamp Z to just below the new wave front; X is preserved.
@@ -1044,7 +1044,7 @@ class GameManager:
         )
         return z_starts
 
-    def _spawn_all_waves_pending(self, player: Player) -> None:
+    def _spawn_all_waves_pending(self) -> None:
         """Spawn every wave in the current stage as static pending cubes.
 
         Called at stage start (from start_first_wave and _on_stage_complete)
@@ -1245,6 +1245,10 @@ class GameManager:
         assert len(self._waves) == len(self._wave_mirrors), (
             "waves / mirrors length mismatch after consuming a pending life"
         )
+        # Small shake: signals to the player that a life was just consumed.
+        # Weaker than the crush shake (amplitude 10, duration 0.6) so it
+        # reads as a "cost paid" rather than a new crush event.
+        self._effects.trigger_shake(amplitude=5.0, duration=0.25)
 
     def _respawn_current_slot(self) -> None:
         """Replay the current wave slot using the EXACT same WaveData and mirror.
@@ -1323,7 +1327,7 @@ class GameManager:
         self._perfect_display = False   # clear PERFECT! flag symmetrically with _retry_pending
         self._wave.reset_for_new_wave() # discard any stale pending cubes
         self._effects.reset()
-        self._spawn_all_waves_pending(player)
+        self._spawn_all_waves_pending()
         player.clamp_z_before_wave(self.wave_front_z)
         self._intro_elapsed = 0.0
         self._phase = GamePhase.STAGE_INTRO
