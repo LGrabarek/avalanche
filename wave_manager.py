@@ -367,6 +367,29 @@ class WaveManager:
             if (not cube.pending) and cube.grid_z == front_edge_z + 1
         )
 
+    # --- Pending removal -----------------------------------------------------
+
+    def remove_pending_in_range(self, z_front: int, z_back: int) -> int:
+        """Remove all pending cubes whose grid_z is in [z_front, z_back].
+
+        Returns the count of cubes removed.  Raises ValueError for an invalid
+        z range.  Called by GameManager when a pre-placed pending wave is
+        consumed as a crush retry life and must not appear on screen or be
+        activated later.
+        """
+        if not (0 <= z_front <= z_back < GRID_DEPTH):
+            raise ValueError(
+                f"z range [{z_front}, {z_back}] invalid for GRID_DEPTH {GRID_DEPTH}"
+            )
+        before = len(self._cubes)
+        self._cubes = [
+            c for c in self._cubes
+            if not (c.pending and z_front <= c.grid_z <= z_back)
+        ]
+        removed = before - len(self._cubes)
+        assert removed >= 0, "remove_pending_in_range removed negative cubes"
+        return removed
+
     # --- Rendering hand-off --------------------------------------------------
 
     def iter_cubes(self) -> Iterator[tuple[int, int, float, CubeType, bool]]:

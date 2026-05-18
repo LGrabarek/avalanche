@@ -1128,18 +1128,19 @@ class GameManager:
 
         Crushed path (_wave_crushed is True):
           _retry_pending is set (drives "AGAIN!" banner and [AGAIN] HUD tag).
-          If a later slot exists, _wave_index advances and that pre-placed
-          pending wave activates as-is — no respawn.  If this was the last
-          slot (no next pending wave), _post_rising_reload is set so that
-          _reload_remaining_waves fires after the WAVE_RISING pause via
-          STAGE_INTRO with a fresh batch of all remaining needed waves.
+          If pending waves remain beyond the current slot, the BACK-MOST
+          pending wave is consumed as a retry life: its cubes are removed from
+          the grid, _waves and _wave_z_starts shrink, and the current slot is
+          respawned at the same z position with a fresh pool variant.  The
+          visible row count decreases by one wave each crush.  If all pending
+          waves are exhausted (no entry beyond _wave_index), _post_rising_reload
+          triggers a full batch reload via STAGE_INTRO after the WAVE_RISING.
 
         Clean path (_wave_crushed is False):
           Perfect criteria checked and bonus applied. _clean_clears incremented.
           Stage ends the moment _clean_clears reaches _waves_per_stage (= 4).
-          Otherwise _wave_index advances. If the last slot was just cleaned but
-          the stage is not yet complete, _post_rising_reload is set so that
-          _reload_remaining_waves fires after the WAVE_RISING pause.
+          Otherwise _wave_index advances. If the batch is exhausted (no more
+          pending waves), _post_rising_reload triggers a reload via STAGE_INTRO.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
         player.uncrush()
@@ -1148,12 +1149,13 @@ class GameManager:
             self._wave_crushed = False
             self._retry_pending = True   # drives "AGAIN!" banner / [AGAIN] HUD tag
             self._perfect_display = False
-            next_index = self._wave_index + 1
-            if next_index < len(self._waves):
-                # Non-last slot: the next pre-placed pending wave becomes the retry.
-                self._wave_index = next_index
+            if self._wave_index + 1 < len(self._waves):
+                # Lives remain: consume the back-most pending wave as a retry
+                # token, then respawn the current slot at the same z position.
+                self._consume_last_pending_life()
+                self._respawn_current_slot()
             else:
-                # Last slot: no pending wave waiting; full reload after WAVE_RISING.
+                # All pending waves exhausted; full reload after WAVE_RISING.
                 self._post_rising_reload = True
             self._wave_rising_timer = WAVE_RISING_DURATION
             self._phase = GamePhase.WAVE_RISING
@@ -1193,6 +1195,82 @@ class GameManager:
             self._post_rising_reload = True
         self._wave_rising_timer = WAVE_RISING_DURATION
         self._phase = GamePhase.WAVE_RISING
+
+    def _consume_last_pending_life(self) -> None:
+        """Remove the back-most pending wave, consuming one crush-retry life.
+
+        Called from the crush path of _on_wave_cleared when pending waves
+        remain beyond the current active slot.  Takes the LAST entry in
+        _waves (the pre-placed wave furthest from the player) and discards
+        its pending cubes via remove_pending_in_range, then shrinks _waves
+        and _wave_z_starts by one entry.  The visible row count on screen
+        decreases by one wave each call, giving the player a clear signal
+        that a life has been spent.
+        """
+        last_idx = len(self._waves) - 1
+        assert last_idx > self._wave_index, (
+            f"last_idx {last_idx} <= wave_index {self._wave_index} — "
+            "cannot consume the current active slot as a life"
+        )
+        assert last_idx < len(self._wave_z_starts), (
+            f"last_idx {last_idx} out of range for _wave_z_starts"
+        )
+        z_back = self._wave_z_starts[last_idx]
+        row_count = self._waves[last_idx].row_count
+        z_front = z_back - row_count + 1
+        removed = self._wave.remove_pending_in_range(z_front, z_back)
+        assert removed >= 0, "remove_pending_in_range returned a negative count"
+        waves_list = list(self._waves)
+        _ = waves_list.pop(last_idx)   # consumed; return value unused
+        self._waves = tuple(waves_list)
+        _ = self._wave_z_starts.pop(last_idx)  # consumed; return value unused
+        assert len(self._waves) == len(self._wave_z_starts), (
+            "waves / z_starts length mismatch after consuming a pending life"
+        )
+
+    def _respawn_current_slot(self) -> None:
+        """Spawn a fresh pool variant for the current wave slot as pending cubes.
+
+        Called after _consume_last_pending_life in the crush-retry path.
+        Picks a random A/B variant from STAGE_POOL_SLOTS[stage][_wave_index]
+        and places its cubes as pending at _wave_z_starts[_wave_index] — the
+        same z position as the original pre-placed wave — so the retry appears
+        at the same depth on the grid and feels like the same obstacle.
+        Updates self._waves[_wave_index] so wave_code in the HUD reflects the
+        new variant during the WAVE_RISING pause.
+        """
+        assert len(self._waves) > 0, "_respawn_current_slot called with no waves"
+        assert 0 <= self._wave_index < len(self._waves), (
+            f"wave_index {self._wave_index} out of range [0, {len(self._waves)})"
+        )
+        assert self._stage_index < len(STAGE_POOL_SLOTS), (
+            f"stage_index {self._stage_index} out of range for STAGE_POOL_SLOTS"
+        )
+        assert len(self._wave_z_starts) > self._wave_index, (
+            "_respawn_current_slot called before z_starts were computed"
+        )
+        pool_key = STAGE_POOL_SLOTS[self._stage_index][self._wave_index]
+        pool = WAVE_POOLS[pool_key]
+        assert len(pool) >= 1, f"pool '{pool_key}' is empty"
+        variant_idx = random.randrange(len(pool))
+        wave_data = pool[variant_idx]
+        assert wave_data.row_count == self._waves[self._wave_index].row_count, (
+            f"retry variant row_count {wave_data.row_count} != current "
+            f"{self._waves[self._wave_index].row_count} — z_starts would be wrong"
+        )
+        # Swap WaveData so wave_code shows the respawned variant's identifier.
+        waves_list = list(self._waves)
+        waves_list[self._wave_index] = wave_data
+        self._waves = tuple(waves_list)
+        # Spawn pending cubes at the same z position as the original wave.
+        z_start = self._wave_z_starts[self._wave_index]
+        mirror = random.random() < 0.5
+        positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+        for gx, gz, cube_type in positions:
+            self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert self._wave.cube_count > 0, (
+            "_respawn_current_slot placed no cubes — wave data may be empty"
+        )
 
     def _reload_remaining_waves(self, player: Player) -> None:
         """Spawn the remaining needed waves from pool and enter STAGE_INTRO.
