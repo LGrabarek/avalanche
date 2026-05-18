@@ -239,13 +239,19 @@ class GameManager:
 
     @property
     def wave_index(self) -> int:
-        """0-based index of the currently active wave."""
-        return self._wave_index
+        """0-based count of clean clears earned so far this stage.
+
+        The HUD adds 1 to get the display wave number, e.g. 2 clean clears →
+        "Wave 3/4" — the player is working on their 3rd clean clear.  This
+        stays fixed on crush (advancing to the next pending slot does not count
+        as a clear), so the counter reflects true progress rather than batch slot.
+        """
+        return self._clean_clears
 
     @property
     def wave_count(self) -> int:
-        """Total number of waves in the current stage sequence."""
-        return len(self._waves)
+        """Total clean clears required to complete the current stage (always 4)."""
+        return self._waves_per_stage
 
     @property
     def stage_index(self) -> int:
@@ -339,7 +345,21 @@ class GameManager:
         assert 1 <= result <= 11, f"active_wave_width {result} out of [1, 11]"
         return result
 
-    # --- Stage-indexed tick interval helpers ---------------------------------
+    # --- Stage-indexed helpers -----------------------------------------------
+
+    @property
+    def _waves_per_stage(self) -> int:
+        """Number of clean clears required to complete the current stage.
+
+        Derived from STAGE_POOL_SLOTS so it automatically matches the pool
+        definition (currently 4 for every stage).  Used as the stage-complete
+        threshold and as the wave_count denominator so both stay in sync.
+        """
+        if self._stage_index < len(STAGE_POOL_SLOTS):
+            result = len(STAGE_POOL_SLOTS[self._stage_index])
+            assert result > 0, f"STAGE_POOL_SLOTS[{self._stage_index}] is empty"
+            return result
+        return 4  # fallback for legacy / test paths where stage_index is out of range
 
     @property
     def _cur_tick_interval(self) -> float:
@@ -1130,7 +1150,7 @@ class GameManager:
                 _ = self._grid.restore_front_row()
             self._perfect_display = is_perfect
             self._clean_clears += 1
-            if self._clean_clears >= len(self._waves):
+            if self._clean_clears >= self._waves_per_stage:
                 # Stage complete — even if unused pending waves remain in this batch.
                 self._end_hold_elapsed = 0.0
                 total_stages = (
@@ -1153,24 +1173,32 @@ class GameManager:
             self._phase = GamePhase.WAVE_RISING
 
     def _reload_stage_waves(self, player: Player) -> None:
-        """Reload a fresh 4-wave batch for the current stage via STAGE_INTRO.
+        """Reload only the REMAINING uncleaned waves for the current stage.
 
-        Called from _on_wave_cleared when all pending waves in the current batch
-        are consumed but _clean_clears has not yet reached len(_waves).  Picks
-        a new A/B variant for each of the stage's 4 pool slots, re-spawns them
-        as pending cubes, and enters STAGE_INTRO so the player sees the rolling
-        preview before the first wave of the new batch activates.
+        Called from _on_wave_cleared when the current wave batch is exhausted
+        but _clean_clears < _waves_per_stage.  Spawns exactly
+        `_waves_per_stage - _clean_clears` waves drawn from the pool slots the
+        player has not yet cleared, then re-enters STAGE_INTRO.
 
-        _clean_clears is NOT reset here — accumulated clean clears carry forward
-        so progress is preserved across batch reloads within the same stage.
+        Example: _clean_clears=2, _waves_per_stage=4 → spawn 2 waves from pool
+        slots S{n}W2 and S{n}W3 so the player sees only the waves they still owe.
+
+        _clean_clears is NOT reset — progress carries forward across reloads.
         """
         assert self._stage_index < len(STAGE_POOL_SLOTS), (
             f"stage_index {self._stage_index} out of range for STAGE_POOL_SLOTS"
         )
-        slot_keys = STAGE_POOL_SLOTS[self._stage_index]
-        assert len(slot_keys) == 4, f"expected 4 slot keys, got {len(slot_keys)}"
+        all_slot_keys = STAGE_POOL_SLOTS[self._stage_index]
+        remaining = len(all_slot_keys) - self._clean_clears
+        assert remaining > 0, (
+            f"_reload_stage_waves called but no waves remain "
+            f"(clean_clears={self._clean_clears}, total={len(all_slot_keys)})"
+        )
+        # Slice off the already-cleared slots; only take the uncleared ones.
+        reload_keys = all_slot_keys[self._clean_clears:]
+        assert len(reload_keys) == remaining, "reload_keys length mismatch"
         new_waves: list[WaveData] = []
-        for key in slot_keys:
+        for key in reload_keys:
             pool = WAVE_POOLS[key]
             assert len(pool) >= 1, f"pool '{key}' is empty"
             variant_idx = 0 if random.random() < 0.5 else 1
@@ -1178,7 +1206,9 @@ class GameManager:
                 f"pool '{key}' has only {len(pool)} variant(s); need at least 2"
             )
             new_waves.append(pool[variant_idx])
-        assert len(new_waves) == 4, "reloaded wave batch must have 4 waves"
+        assert len(new_waves) == remaining, (
+            f"expected {remaining} reloaded waves, got {len(new_waves)}"
+        )
         self._waves = tuple(new_waves)
         self._wave_index = 0
         self._retry_pending = False   # fresh batch; no in-flight retry to display
