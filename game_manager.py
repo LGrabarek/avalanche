@@ -1111,117 +1111,117 @@ class GameManager:
         self._phase = GamePhase.WAVE_ACTIVE
 
     def _on_wave_cleared(self, player: Player) -> None:
-        """Apply Perfect bonus and gate stage completion on clean-clear count.
+        """Gate stage completion on clean-clear count; retry current slot on crush.
 
-        Called when wave.cube_count reaches 0 (both WAVE_ACTIVE and AVALANCHE).
+        Called when wave.active_cube_count reaches 0.
 
         Crushed path (_wave_crushed is True):
-          No clean clear is counted. The next pre-spawned pending wave becomes
-          the retry — the same wave is NOT re-placed; the queue simply advances.
+          _wave_index does NOT advance. The current pool slot is re-spawned
+          (possibly a different A/B variant) so the player retries the same
+          wave position. Pending waves from later slots remain untouched on the
+          grid. _retry_pending is set so the WAVE_RISING banner shows "RETRY!".
 
         Clean path (_wave_crushed is False):
-          Perfect criteria checked and bonus/row applied; _clean_clears incremented.
-          Stage ends once _clean_clears reaches len(_waves) (= 4), even if pending
-          waves from the current batch remain unused.
-
-        Both paths then advance _wave_index. If the batch is exhausted before the
-        stage completes, _reload_stage_waves replays a fresh set of 4 via STAGE_INTRO
-        while _clean_clears carries over.
+          Perfect criteria checked and bonus applied. _clean_clears incremented.
+          Stage ends the moment _clean_clears reaches _waves_per_stage (= 4).
+          Otherwise _wave_index advances by one and WAVE_RISING begins.
         """
         assert len(self._waves) > 0, "_on_wave_cleared called before waves were set"
         player.uncrush()
         self._grid.clear_mark()
         if self._wave_crushed:
-            # Advance to the next pending wave without counting a clean clear.
-            # Set retry_pending so the WAVE_RISING banner shows "RETRY!" and the
-            # HUD shows [RETRY].  _retry_pending is cleared in _begin_wave.
+            # Retry: re-spawn the current slot (possibly a different variant);
+            # wave_index stays fixed so the counter doesn't advance.
             self._wave_crushed = False
             self._retry_pending = True
             self._perfect_display = False
-        else:
-            # Clean clear: check Perfect criteria and apply bonus.
-            if self._audio is not None:
-                self._audio.play_wave_clear()
-            wave_data = self._waves[self._wave_index]
-            is_perfect = (
-                not self._had_avalanche
-                and not self._forbidden_captured
-                and self._wave_total_misses == 0
-            )
-            if is_perfect:
-                bonus = self._calc_perfect_bonus(self._player_steps, wave_data.ideal_steps)
-                self._score += bonus
-                _ = self._grid.restore_front_row()
-            self._perfect_display = is_perfect
-            self._clean_clears += 1
-            if self._clean_clears >= self._waves_per_stage:
-                # Stage complete — even if unused pending waves remain in this batch.
-                self._end_hold_elapsed = 0.0
-                total_stages = (
-                    len(self._all_stage_waves) if self._all_stage_waves else len(STAGES)
-                )
-                if self._stage_index >= total_stages - 1:
-                    self._iq_score = self._calculate_final_iq()
-                    self._phase = GamePhase.VICTORY
-                else:
-                    self._phase = GamePhase.STAGE_CLEAR
-                return
-        # Both paths advance to the next wave slot in the current batch.
-        next_index = self._wave_index + 1
-        if next_index >= len(self._waves):
-            # Batch exhausted; stage not complete yet — reload a fresh 4-wave batch.
-            self._reload_stage_waves(player)
-        else:
-            self._wave_index = next_index
+            self._respawn_current_slot()
             self._wave_rising_timer = WAVE_RISING_DURATION
             self._phase = GamePhase.WAVE_RISING
+            return
+        # Clean clear: apply Perfect bonus and count the clear.
+        if self._audio is not None:
+            self._audio.play_wave_clear()
+        wave_data = self._waves[self._wave_index]
+        is_perfect = (
+            not self._had_avalanche
+            and not self._forbidden_captured
+            and self._wave_total_misses == 0
+        )
+        if is_perfect:
+            bonus = self._calc_perfect_bonus(self._player_steps, wave_data.ideal_steps)
+            self._score += bonus
+            _ = self._grid.restore_front_row()
+        self._perfect_display = is_perfect
+        self._clean_clears += 1
+        if self._clean_clears >= self._waves_per_stage:
+            # All slots cleared — stage complete.
+            self._end_hold_elapsed = 0.0
+            total_stages = (
+                len(self._all_stage_waves) if self._all_stage_waves else len(STAGES)
+            )
+            if self._stage_index >= total_stages - 1:
+                self._iq_score = self._calculate_final_iq()
+                self._phase = GamePhase.VICTORY
+            else:
+                self._phase = GamePhase.STAGE_CLEAR
+            return
+        # Advance to the next wave slot and start the between-wave pause.
+        self._wave_index += 1
+        assert self._wave_index < len(self._waves), (
+            f"wave_index {self._wave_index} exceeded wave count {len(self._waves)} — "
+            "stage-complete check should have fired first"
+        )
+        self._wave_rising_timer = WAVE_RISING_DURATION
+        self._phase = GamePhase.WAVE_RISING
 
-    def _reload_stage_waves(self, player: Player) -> None:
-        """Reload only the REMAINING uncleaned waves for the current stage.
+    def _respawn_current_slot(self) -> None:
+        """Re-place cubes for the current wave slot from its pool.
 
-        Called from _on_wave_cleared when the current wave batch is exhausted
-        but _clean_clears < _waves_per_stage.  Spawns exactly
-        `_waves_per_stage - _clean_clears` waves drawn from the pool slots the
-        player has not yet cleared, then re-enters STAGE_INTRO.
+        Called from the crushed path of _on_wave_cleared. Picks a fresh A/B
+        variant from WAVE_POOLS for this stage × slot (re-rolled randomly so
+        the player may see a different pattern on retry), updates self._waves so
+        wave_code reflects the new selection, then spawns the variant's cubes as
+        pending at the same z position.
 
-        Example: _clean_clears=2, _waves_per_stage=4 → spawn 2 waves from pool
-        slots S{n}W2 and S{n}W3 so the player sees only the waves they still owe.
-
-        _clean_clears is NOT reset — progress carries forward across reloads.
+        Pending cubes for all later slots are left untouched — the player still
+        sees those waves sitting further back on the grid.
         """
+        assert len(self._waves) > 0, "_respawn_current_slot called with empty waves"
+        assert 0 <= self._wave_index < len(self._waves), (
+            f"wave_index {self._wave_index} out of range"
+        )
         assert self._stage_index < len(STAGE_POOL_SLOTS), (
             f"stage_index {self._stage_index} out of range for STAGE_POOL_SLOTS"
         )
-        all_slot_keys = STAGE_POOL_SLOTS[self._stage_index]
-        remaining = len(all_slot_keys) - self._clean_clears
-        assert remaining > 0, (
-            f"_reload_stage_waves called but no waves remain "
-            f"(clean_clears={self._clean_clears}, total={len(all_slot_keys)})"
+        assert len(self._wave_z_starts) > self._wave_index, (
+            "_respawn_current_slot called before z_starts were computed"
         )
-        # Slice off the already-cleared slots; only take the uncleared ones.
-        reload_keys = all_slot_keys[self._clean_clears:]
-        assert len(reload_keys) == remaining, "reload_keys length mismatch"
-        new_waves: list[WaveData] = []
-        for key in reload_keys:
-            pool = WAVE_POOLS[key]
-            assert len(pool) >= 1, f"pool '{key}' is empty"
-            variant_idx = 0 if random.random() < 0.5 else 1
-            assert len(pool) > variant_idx, (
-                f"pool '{key}' has only {len(pool)} variant(s); need at least 2"
-            )
-            new_waves.append(pool[variant_idx])
-        assert len(new_waves) == remaining, (
-            f"expected {remaining} reloaded waves, got {len(new_waves)}"
+        pool_key = STAGE_POOL_SLOTS[self._stage_index][self._wave_index]
+        pool = WAVE_POOLS[pool_key]
+        assert len(pool) >= 1, f"pool '{pool_key}' is empty"
+        variant_idx = 0 if random.random() < 0.5 else 1
+        assert len(pool) > variant_idx, (
+            f"pool '{pool_key}' has only {len(pool)} variant(s); need at least 2"
         )
-        self._waves = tuple(new_waves)
-        self._wave_index = 0
-        self._retry_pending = False   # fresh batch; no in-flight retry to display
-        self._wave.reset_for_new_wave()
-        self._effects.reset()
-        self._spawn_all_waves_pending(player)
-        player.clamp_z_before_wave(self.wave_front_z)
-        self._intro_elapsed = 0.0
-        self._phase = GamePhase.STAGE_INTRO
+        wave_data = pool[variant_idx]
+        assert wave_data.row_count == self._waves[self._wave_index].row_count, (
+            f"retry variant row_count {wave_data.row_count} != slot original "
+            f"{self._waves[self._wave_index].row_count} — z_starts would be wrong"
+        )
+        # Swap the WaveData so wave_code shows the new variant's identifier.
+        waves_list = list(self._waves)
+        waves_list[self._wave_index] = wave_data
+        self._waves = tuple(waves_list)
+        # Spawn the new variant as pending at the slot's pre-computed z position.
+        z_start = self._wave_z_starts[self._wave_index]
+        mirror = random.random() < 0.5
+        positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+        for gx, gz, cube_type in positions:
+            self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert self._wave.cube_count > 0, (
+            "_respawn_current_slot placed no cubes — wave data may be empty"
+        )
 
     def _calc_perfect_bonus(self, actual: int, ideal: int) -> int:
         """Return the Perfect step-efficiency score bonus.
