@@ -183,7 +183,8 @@ class GameManager:
         # self._all_stage_waves[self._stage_index] rather than STAGES directly.
         self._all_stage_waves: tuple[tuple[WaveData, ...], ...] = ()
         # Crush-retry gate: True when the current wave had a player crush.
-        # On wave cleared, if this is True the wave is replayed; else advance.
+        # On wave cleared, if this is True the wave queue advances to the next
+        # pending wave without counting a clean clear; else normal clean clear.
         self._wave_crushed: bool = False
         # Retry display flag: True while the WAVE_RISING pause is a crush retry
         # (cleared when _begin_wave fires so the actual replayed wave starts clean).
@@ -1014,9 +1015,9 @@ class GameManager:
         caller before this method runs so there are no stale cubes.
         """
         assert len(self._waves) > 0, "_spawn_all_waves_pending called with empty waves"
-        assert self._wave.active_cube_count == 0, (
-            "_spawn_all_waves_pending called with active cubes still present — "
-            "call wave.reset_for_new_wave() first"
+        assert self._wave.cube_count == 0, (
+            "_spawn_all_waves_pending called with cubes still present (active or "
+            "pending) — call wave.reset_for_new_wave() first"
         )
         self._wave_z_starts = self._compute_wave_z_starts()
         assert len(self._wave_z_starts) == len(self._waves), (
