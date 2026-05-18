@@ -202,6 +202,10 @@ class GameManager:
         # z_back coordinate for each wave's back row — populated by
         # _spawn_all_waves_pending().  Index i matches self._waves[i].
         self._wave_z_starts: list[int] = []
+        # Per-wave mirror flag — stored at spawn time so crush-retry
+        # can replay the exact same cube layout (same A/B variant +
+        # same mirror orientation = byte-identical pattern).
+        self._wave_mirrors: list[bool] = []
         self._iq_score: int = 0
         # Per-wave Perfect tracking — reset by _spawn_wave() at each wave start.
         self._forbidden_captured: bool = False   # Any FORBIDDEN captured this wave?
@@ -983,6 +987,7 @@ class GameManager:
         self._post_rising_reload = False  # cleared; no deferred reload pending on fresh start
         self._clean_clears = 0        # cleared; no clean clears counted yet
         self._wave_z_starts = []
+        self._wave_mirrors = []
         self._forbidden_captured = False
         self._had_avalanche = False
         self._player_steps = 0
@@ -1058,13 +1063,22 @@ class GameManager:
         assert len(self._wave_z_starts) == len(self._waves), (
             "z_starts length mismatch after _compute_wave_z_starts"
         )
+        self._wave_mirrors = []
         for wave_idx, wave_data in enumerate(self._waves):
             z_start = self._wave_z_starts[wave_idx]
-            # Per-wave mirror decision keeps variety across multiple waves.
+            # Roll mirror once per wave and store it so crush-retry can
+            # reproduce the exact same cube layout without re-randomising.
             mirror = random.random() < 0.5
+            assert len(self._wave_mirrors) < len(self._waves), (
+                "wave_mirrors growth exceeded wave count — loop invariant broken"
+            )
+            self._wave_mirrors.append(mirror)
             positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
             for gx, gz, cube_type in positions:
                 self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert len(self._wave_mirrors) == len(self._waves), (
+            "wave_mirrors length mismatch after _spawn_all_waves_pending"
+        )
         assert self._wave.cube_count > 0, (
             "no cubes placed by _spawn_all_waves_pending — wave list may be empty"
         )
@@ -1224,48 +1238,42 @@ class GameManager:
         _ = waves_list.pop(last_idx)   # consumed; return value unused
         self._waves = tuple(waves_list)
         _ = self._wave_z_starts.pop(last_idx)  # consumed; return value unused
+        _ = self._wave_mirrors.pop(last_idx)   # keep parallel with _waves
         assert len(self._waves) == len(self._wave_z_starts), (
             "waves / z_starts length mismatch after consuming a pending life"
         )
+        assert len(self._waves) == len(self._wave_mirrors), (
+            "waves / mirrors length mismatch after consuming a pending life"
+        )
 
     def _respawn_current_slot(self) -> None:
-        """Spawn a fresh pool variant for the current wave slot as pending cubes.
+        """Replay the current wave slot using the EXACT same WaveData and mirror.
 
         Called after _consume_last_pending_life in the crush-retry path.
-        Picks a random A/B variant from STAGE_POOL_SLOTS[stage][_wave_index]
-        and places its cubes as pending at _wave_z_starts[_wave_index] — the
-        same z position as the original pre-placed wave — so the retry appears
-        at the same depth on the grid and feels like the same obstacle.
-        Updates self._waves[_wave_index] so wave_code in the HUD reflects the
-        new variant during the WAVE_RISING pause.
+        Uses self._waves[_wave_index] (the same A/B variant that crushed the
+        player — no re-roll) and self._wave_mirrors[_wave_index] (the same
+        mirror orientation — no re-roll).  Together these guarantee an
+        identical cube layout: same pattern, same positions, same z depth.
+        No new randomness is introduced so the player faces exactly the wave
+        that defeated them.
         """
         assert len(self._waves) > 0, "_respawn_current_slot called with no waves"
         assert 0 <= self._wave_index < len(self._waves), (
             f"wave_index {self._wave_index} out of range [0, {len(self._waves)})"
         )
-        assert self._stage_index < len(STAGE_POOL_SLOTS), (
-            f"stage_index {self._stage_index} out of range for STAGE_POOL_SLOTS"
+        assert self._wave_index < len(self._wave_z_starts), (
+            "_respawn_current_slot: _wave_z_starts not yet computed"
         )
-        assert len(self._wave_z_starts) > self._wave_index, (
-            "_respawn_current_slot called before z_starts were computed"
+        assert self._wave_index < len(self._wave_mirrors), (
+            "_respawn_current_slot: _wave_mirrors not yet computed"
         )
-        pool_key = STAGE_POOL_SLOTS[self._stage_index][self._wave_index]
-        pool = WAVE_POOLS[pool_key]
-        assert len(pool) >= 1, f"pool '{pool_key}' is empty"
-        variant_idx = random.randrange(len(pool))
-        wave_data = pool[variant_idx]
-        assert wave_data.row_count == self._waves[self._wave_index].row_count, (
-            f"retry variant row_count {wave_data.row_count} != current "
-            f"{self._waves[self._wave_index].row_count} — z_starts would be wrong"
-        )
-        # Swap WaveData so wave_code shows the respawned variant's identifier.
-        waves_list = list(self._waves)
-        waves_list[self._wave_index] = wave_data
-        self._waves = tuple(waves_list)
-        # Spawn pending cubes at the same z position as the original wave.
-        z_start = self._wave_z_starts[self._wave_index]
-        mirror = random.random() < 0.5
+        wave_data = self._waves[self._wave_index]   # same variant, no re-roll
+        mirror = self._wave_mirrors[self._wave_index]  # same orientation, no re-roll
+        z_start = self._wave_z_starts[self._wave_index]  # same z depth, unchanged
         positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+        assert len(positions) > 0, (
+            "_respawn_current_slot: wave_data produced no spawn positions"
+        )
         for gx, gz, cube_type in positions:
             self._wave.spawn_cube(gx, gz, cube_type, pending=True)
         assert self._wave.cube_count > 0, (
