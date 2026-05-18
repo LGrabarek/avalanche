@@ -239,14 +239,18 @@ class GameManager:
 
     @property
     def wave_index(self) -> int:
-        """0-based count of clean clears earned so far this stage.
+        """0-based progress index for the current stage, capped at the last wave.
 
-        The HUD adds 1 to get the display wave number, e.g. 2 clean clears →
-        "Wave 3/4" — the player is working on their 3rd clean clear.  This
-        stays fixed on crush (advancing to the next pending slot does not count
-        as a clear), so the counter reflects true progress rather than batch slot.
+        Returns _clean_clears but never exceeds _waves_per_stage - 1, so the
+        HUD ("Wave {wave_index+1}/{wave_count}") displays "Wave 4/4" at the
+        moment the final wave clears rather than "Wave 5/4" before _clean_clears
+        is reset in _on_stage_complete.
+
+        Stays fixed on crush (advancing the batch slot does not count as a
+        clean clear), so the counter reflects true progress throughout.
         """
-        return self._clean_clears
+        max_idx = max(0, self._waves_per_stage - 1)
+        return min(self._clean_clears, max_idx)
 
     @property
     def wave_count(self) -> int:
