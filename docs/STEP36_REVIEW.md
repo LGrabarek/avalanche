@@ -1,4 +1,4 @@
-# Step 36 — Wave pool system, wave codes, and clean-clear gate
+# Step 36 — Wave pool system, wave codes, and clean-clear gate (rev6)
 
 ## What changed
 
@@ -19,8 +19,7 @@ with wire-up in `main.py` and display in `hud.py`.
   listing the 4 pool keys for that stage.
 - `select_all_waves(rng: random.Random) -> tuple[tuple[WaveData, ...], ...]` — called
   once per run; draws one variant per slot randomly, returning 10 × 4 waves.
-- `STAGES` backward-compat alias — built from A-variants only; keeps any code that
-  still calls `start_first_wave(player, STAGES[0])` working correctly.
+- `STAGES` backward-compat alias — built from A-variants only.
 
 ### 2 — Unique wave codes
 
@@ -32,52 +31,84 @@ Every `WaveData` now carries a `code: str` field (e.g. `"S3W2B"`):
 - `GameManager.wave_code` property — returns the active wave's code, or `"---"`
   before the first wave is loaded.
 
-### 3 — Clean-clear gate (revised from original crush-retry)
+### 3 — Clean-clear gate with batch reload (rev6 mechanics)
 
-The stage ends only when the player accumulates **4 clean clears** — one per wave slot
-— without being crushed. Being crushed never blocks progress outright; instead the
-next pre-spawned pending wave becomes the immediate retry.
+The stage ends only when the player accumulates **4 clean clears** (one per wave
+slot) across any number of batch reloads. Being crushed never blocks progress; it
+simply advances to the next wave in the current batch.
 
-Key mechanics:
+**Behavioral table for Stage 1 (all crushes, then all clears):**
 
-- **`_clean_clears: int`** — counts clean clears per stage. Incremented when a wave
-  is cleared without a crush. Reset to 0 at every stage transition and on restart.
-- **`_on_wave_cleared`** — two paths:
-  - *Crushed path*: `_wave_crushed` cleared, `_retry_pending` set (RETRY! banner),
-    `_wave_index` advances. No clean clear counted.
-  - *Clean path*: Perfect bonus applied, `_clean_clears += 1`. If `_clean_clears >=
-    4`, enter STAGE_CLEAR / VICTORY immediately — **even if pending waves from the
-    current batch are unused**.
-  - Both paths advance `_wave_index`. If the batch is exhausted before 4 clean clears
-    are accumulated, `_reload_stage_waves` re-enters STAGE_INTRO with a fresh batch.
-- **`_reload_stage_waves(player)`** — picks fresh A/B variants for the stage's 4
-  pool slots, re-spawns all waves as pending cubes, and enters STAGE_INTRO. The
-  `_clean_clears` count carries over so progress is never lost.
-- **`_wave_crushed: bool`** — set to `True` in `_trigger_avalanche`; cleared at the
-  start of the crushed path in `_on_wave_cleared`.
-- No more `_respawn_current_wave` — the original wave cubes are NOT re-placed on
-  crush. The next pre-spawned wave in the batch is activated as-is.
+| Event             | `_wave_index` | `_clean_clears` | Visible rows     | Counter | Banner      |
+|-------------------|---------------|-----------------|------------------|---------|-------------|
+| Stage start       | 0             | 0               | 8 (W0+W1+W2+W3)  | 1/4     | —           |
+| W0 crushed        | →1            | 0               | 6 (W1+W2+W3)     | 1/4     | AGAIN!      |
+| W1 crushed        | →2            | 0               | 4 (W2+W3)        | 1/4     | AGAIN!      |
+| W2 crushed        | →3            | 0               | 2 (W3)           | 1/4     | AGAIN!      |
+| W3 crushed→reload | (STAGE_INTRO) | 0               | 8 (fresh batch)  | 1/4     | AGAIN!→INTRO|
+| W0 cleaned        | →1            | 1               | 6 (W1+W2+W3)     | 2/4     | —           |
+| W1 cleaned        | →2            | 2               | 4 (W2+W3)        | 3/4     | —           |
+| W2 cleaned        | →3            | 3               | 2 (W3)           | 4/4     | —           |
+| W3 cleaned        | —             | 4≥4             | —                | 4/4     | STAGE CLEAR |
 
-### 4 — `start_game` — full-run entry point
+**Key mechanics:**
+
+- **Crush (non-last slot):** `_wave_index` advances to the next slot. No clean clear
+  counted. `_retry_pending = True` → AGAIN! banner + `[AGAIN]` HUD tag during
+  WAVE_RISING. The next pre-placed pending wave activates (no cube respawn).
+
+- **Crush (last slot, batch exhausted):** `_post_rising_reload = True` is set. After
+  the WAVE_RISING pause (AGAIN! still visible), `_reload_remaining_waves` fires,
+  spawning `_waves_per_stage - _clean_clears` fresh waves from pool slots
+  `[_clean_clears:]` and entering STAGE_INTRO for the rolling-wave animation.
+
+- **Clean (not stage complete, non-last slot):** `_clean_clears += 1`, `_wave_index`
+  advances, WAVE_RISING (may show PERFECT!).
+
+- **Clean (not stage complete, last slot):** same as crush-last-slot but
+  `_retry_pending` stays False (no AGAIN! during WAVE_RISING). After WAVE_RISING
+  timer, `_reload_remaining_waves` fires → STAGE_INTRO.
+
+- **Clean (stage complete):** `_clean_clears >= _waves_per_stage` → STAGE_CLEAR /
+  VICTORY immediately. The `_wave_index` increment is never reached.
+
+**New fields:**
+
+- **`_post_rising_reload: bool`** — deferred flag set when a batch is exhausted.
+  Checked and cleared at WAVE_RISING expiry in `update()`. Avoids any flash artifact
+  between WAVE_RISING and STAGE_INTRO.
+- **`_reload_remaining_waves(player)`** — builds wave list from
+  `STAGE_POOL_SLOTS[stage][_clean_clears:]`, resets wave manager, spawns all pending
+  cubes, enters STAGE_INTRO. `_retry_pending` is cleared here so [AGAIN] is absent
+  during the intro animation.
+
+**Removed:** `_respawn_current_slot` — the single-wave silent respawn path is gone.
+
+### 4 — Wave counter display
+
+`GameManager.wave_index` property:
+```python
+max_idx = max(0, self._waves_per_stage - 1)
+return min(self._clean_clears, max_idx)
+```
+- Returns `_clean_clears`, capped at 3 (never 4/4 becomes 5/4).
+- Counter stays fixed on crush (no clean clear counted).
+- Advances to N+1 only after a clean.
+
+### 5 — `start_game` — full-run entry point
 
 `GameManager.start_game(player, all_stage_waves)`:
 
 - Stores the complete run selection in `self._all_stage_waves`.
-- Stage transitions in `_on_stage_complete` read from `_all_stage_waves` instead
-  of the static `STAGES` table.
-- `_do_restart` draws a fresh pool selection via `select_all_waves` so every replay
-  gets a different A/B mix.
-- `main.py` calls `start_game` at startup (replacing the old `start_first_wave(
-  player, STAGES[0])` call).
+- Stage transitions in `_on_stage_complete` read from `_all_stage_waves`.
+- `_do_restart` draws a fresh pool selection via `select_all_waves`.
 
-### 5 — HUD wave code display
+### 6 — HUD wave code display
 
 `hud.py`:
 
-- 5th stat line: `Code: S3W2A` (or `Code: S3W2A  [RETRY]` when a crushed wave
-  is pending replay).
-- `MAX_HUD_CACHE_ENTRIES` bumped from 5 → 6.
-- Line-count assertion updated from 4 → 5.
+- 5th stat line: `Code: S3W2A` (or `Code: S3W2A  [AGAIN]` after a crush).
+- `MAX_HUD_CACHE_ENTRIES` = 6.
 
 ---
 
@@ -85,10 +116,10 @@ Key mechanics:
 
 | File | Change |
 |------|--------|
-| `wave_data.py` | Full rewrite: 80 WaveData objects (40 A + 40 B), `WAVE_POOLS`, `STAGE_POOL_SLOTS`, `select_all_waves`, `STAGES` alias, `code` param on `WaveData` |
-| `game_manager.py` | `start_game`, `_reload_stage_waves`, `_clean_clears` field, `_wave_crushed` field + property, `wave_code` property, `_retry_pending` flag + property, revised `_on_wave_cleared`, `_on_stage_complete` reads `_all_stage_waves` and resets `_clean_clears`, `_do_restart` uses pool selection, `_reset_state` zeros new fields |
-| `main.py` | `import random`; `from wave_data import select_all_waves`; startup uses `start_game(player, select_all_waves(rng))`; WAVE_RISING overlay shows `RETRY!` in orange when `game.retry_pending` |
-| `hud.py` | `MAX_HUD_CACHE_ENTRIES` 5→6; 5th stat line (wave code + retry tag); assertion 4→5 |
+| `wave_data.py` | Full rewrite: 80 WaveData objects (40 A + 40 B), `WAVE_POOLS`, `STAGE_POOL_SLOTS`, `select_all_waves`, `STAGES` alias, `code` param |
+| `game_manager.py` | `start_game`, `_reload_remaining_waves`, `_post_rising_reload` flag, `_clean_clears`, `wave_index`/`wave_count` properties, `_on_wave_cleared` revised crush+clean paths, `_on_stage_complete` + `_reset_state` zero new fields; **removed** `_respawn_current_slot` |
+| `main.py` | `import random`; `from wave_data import select_all_waves`; startup uses `start_game`; WAVE_RISING overlay shows `AGAIN!` in orange when `game.retry_pending` |
+| `hud.py` | `MAX_HUD_CACHE_ENTRIES` 5→6; 5th stat line (wave code + `[AGAIN]` tag); assertion 4→5 |
 
 ---
 
@@ -102,111 +133,91 @@ uv run python main.py
 ```
 
 Expected: game window opens, no console errors, HUD shows `Code: S1W0A` or
-`Code: S1W0B` in the top-left stat block.
+`Code: S1W0B` in the top-left stat block. Counter shows `Wave: 1/4`.
 
-### 2 — Pool variety across runs
-
-1. Start the game twice (restart with any key after first GAME_OVER).
-2. Note the wave code shown in the HUD for Stage 1 Wave 1.
-3. Across multiple restarts the codes should vary (some runs see A, some B).
-
-### 3 — Clean-clear gate — normal path
-
-1. Clear all 4 waves of Stage 1 without being crushed on any of them.
-2. Verify the stage ends after wave 4 is cleared (STAGE_CLEAR screen appears).
-3. The HUD never shows `[RETRY]` during this run.
-
-### 4 — Crush advances to next wave (no respawn)
+### 2 — Crush advances to next wave (no respawn)
 
 1. Play Wave 1 and deliberately let a cube crush you.
 2. After the avalanche clears, verify:
-   - The WAVE_RISING pause appears.
-   - The HUD shows `Code: S1W1X  [RETRY]` — the **second** wave's code, not wave 1's.
-   - The centred `RETRY!` banner appears in orange.
+   - WAVE_RISING pause appears.
+   - HUD shows `Code: S1W1X  [AGAIN]` — the **second** wave's code, not wave 1's.
+   - The centred `AGAIN!` banner appears in orange.
+   - The **wave counter stays at 1/4** (no clean clear counted).
 3. After the rising pause, **Wave 2** (not a respawn of Wave 1) begins.
-4. Clear Wave 2 cleanly — `_clean_clears` is now 1 (Wave 1 was crushed, Wave 2 was clean).
+4. The grid now shows 3 waves of cubes (W1 is active, W2+W3 pending behind it).
 
-### 5 — Batch reload when all 4 waves consumed without 4 clean clears
+### 3 — Batch reload when all 4 waves consumed by crush
 
-1. Get crushed on Waves 1, 2, 3, and 4 of Stage 1 (4 crushes, 0 clean clears).
-2. After Wave 4's avalanche empties, verify:
-   - The full **STAGE_INTRO** rolling-wave animation plays (not just WAVE_RISING).
-   - The animation shows **all 4 waves** of a fresh batch (new A/B variants).
-   - The HUD no longer shows `[RETRY]` during the intro.
-3. The fresh batch begins. The wave counter restarts at `Wave: 1/4`.
+1. Get crushed on all 4 waves of Stage 1 (0 clean clears).
+2. After Wave 4's avalanche empties, verify during WAVE_RISING:
+   - `AGAIN!` banner still visible.
+   - HUD shows `Code: S1W3X  [AGAIN]`.
+   - Counter still 1/4.
+3. After WAVE_RISING timer, verify **STAGE_INTRO** animation plays (not just
+   WAVE_RISING → WAVE_ACTIVE). The rolling-wave animation shows all **4 waves**
+   of a fresh batch.
+4. During STAGE_INTRO, HUD should **not** show `[AGAIN]` tag (cleared before intro).
+5. The fresh batch begins. Counter resets to `Wave: 1/4`.
 
-### 6 — Progress carries across batch reload
+### 4 — Counter tracks clean clears only
+
+1. Start Stage 1. Counter: `Wave: 1/4`.
+2. Get crushed on W0. Next wave is W1. Counter: **still 1/4**.
+3. Clear W1 cleanly. Counter: **2/4**.
+4. Clear W2 cleanly. Counter: **3/4**.
+5. Clear W3 cleanly. Counter: **4/4**. Batch exhausted (1 clean, 3 unplayed).
+6. WAVE_RISING (no AGAIN!) → STAGE_INTRO (3 waves: W1+W2+W3 from pool slots [1:]).
+7. Clear all 3 remaining waves cleanly → STAGE CLEAR.
+
+### 5 — Progress carries across batch reload
 
 1. Clear Waves 1 and 2 cleanly (`_clean_clears = 2`), then get crushed on Waves 3 and 4.
-2. Batch reloads via STAGE_INTRO.
-3. Clear Wave 1 of the new batch cleanly (`_clean_clears = 3`).
+2. Batch reloads via STAGE_INTRO with **2 waves** (slots [2] and [3]).
+3. Clear Wave 1 of the new batch cleanly (`_clean_clears = 3`). Counter: 4/4.
 4. Clear Wave 2 of the new batch cleanly (`_clean_clears = 4`).
-5. Verify the **STAGE_CLEAR** screen appears immediately after Wave 2 — even though
-   Waves 3 and 4 of the new batch were never played.
+5. Verify the **STAGE_CLEAR** screen appears immediately — even though only 2 waves
+   were in the new batch.
 
-### 7 — RETRY! banner in the wave rising overlay
+### 6 — Counter never shows 5/4
 
-1. Get crushed on any wave.
-2. After the avalanche empties, observe the WAVE_RISING pause.
-3. Verify:
-   - The centred banner shows **`RETRY!`** in orange (not `PERFECT!`).
-   - Below it, the wave label reads `Stage 1 — Wave 2 / 4` (next wave, not same wave).
-   - The top-left HUD shows `Code: S1W1X  [RETRY]`.
-4. After the pause, **the next wave** (not a respawn) begins.
+1. Clear all 4 waves of Stage 1 without any crush.
+2. When the final wave clears, verify the HUD shows `Wave: 4/4` (not `Wave: 5/4`)
+   before the STAGE_CLEAR overlay appears.
 
-### 8 — Stage transition reads pool selection
+### 7 — Stage transition reads pool selection
 
 1. Clear all 4 waves of Stage 1 cleanly.
-2. Advance to Stage 2 (press any key at the STAGE CLEAR screen).
-3. Verify the HUD wave code in Stage 2 uses the Stage 2 pool (code starts `S2W0`).
+2. Advance to Stage 2 (press any key at STAGE CLEAR screen).
+3. Verify HUD wave code in Stage 2 uses the Stage 2 pool (code starts `S2W0`).
 
-### 9 — Restart re-rolls pool selection
+### 8 — Restart re-rolls pool selection
 
 1. Play to Stage 2. Note the wave codes.
 2. Press any key on GAME_OVER to restart.
 3. Play Stage 2 again. The codes may differ from the first run.
 
-### 10 — Browser / WASM test (optional but recommended)
-
-```bash
-bash run_dev.sh
-# Open http://localhost:8000
-```
-
-All above behaviours should work identically in the browser.
-
 ---
 
-## Expert panel summary
+## Expert panel summary (rev6b)
 
 | Reviewer | Verdict | Notes |
 |----------|---------|-------|
-| Vision Lead | APPROVED WITH CONCERNS | ~10 A/B pool pairs have identical rows (no actual variety delivered for those slots); S7W3B inline comment arithmetic inconsistent (non-blocking data quality issues) |
-| Code Quality | APPROVED WITH CONCERNS | All 11 Power of Ten rules pass; revised `_on_wave_cleared` under 50 lines; `_reload_stage_waves` pool-access idiom correct; all concerns cleared |
-| Platform Engineer | APPROVED WITH CONCERNS | All WASM criteria pass; `random` module fully available in CPython WASM; module-level data (~176 KB worst case) well within budget; HUD cache correctly sized |
-| UX Tester | APPROVED WITH CONCERNS | **BLOCKING (fixed):** `_retry_pending` flag added so WAVE_RISING banner and HUD `[RETRY]` tag stay visible during the pause. Revised mechanic: crushed wave advances to next slot (no respawn); stage ends on 4 clean clears; batch reload via STAGE_INTRO when exhausted. Non-blocking: 6 A/B pairs identical; S9W2A/B ideal discrepancy; wave code is developer-facing info |
+| Vision Lead | APPROVED WITH CONCERNS | Concerns A+C fixed: `random.randrange(len(pool))` replaces hardcoded 0-or-1; `_perfect_display` cleared in `_reload_remaining_waves`. Concern B (effects.reset in non-last crush path) is not a regression vs pre-rev6 — left as-is. |
+| Code Quality | APPROVED | All 10 Power of Ten rules pass. |
+| Platform Engineer | APPROVED | All WASM criteria pass. Minor pool-size note addressed by randrange fix. |
+| UX Tester | APPROVED WITH CONCERNS | Minor: counter jump on fresh batch is correct behavior matching original I.Q. `_perfect_display` hygiene note addressed. No BLOCKING issues. |
 
-### Blocking fix applied
+### Panel fixes applied in rev6b
 
-**`_retry_pending: bool`** — drives both the `[RETRY]` HUD tag and the `RETRY!`
-orange banner in the WAVE_RISING overlay. Set in the crushed path of `_on_wave_cleared`
-(when `_wave_crushed` is cleared); cleared in `_begin_wave` when the wave activates.
+1. **`_perfect_display` cleared in `_reload_remaining_waves`** — alongside `_retry_pending`, so both flags are symmetrically reset before STAGE_INTRO (prevents any stale PERFECT! flag if rendering ever reads it during the intro).
+2. **`random.randrange(len(pool))` in `_reload_remaining_waves`** — replaces `0 if random.random() < 0.5 else 1`, making variant selection pool-size-agnostic.
 
-`RETRY!` and `PERFECT!` are mutually exclusive (`_had_avalanche = True` disqualifies
-Perfect on a crushed wave).
+### Non-blocking advisories (carried over)
 
-### Known non-blocking advisories
-
-1. **~10 A/B pool pairs have identical rows** — `S4W3`, `S5W3`, `S6W2`, `S6W3`,
-   `S8W1`, `S8W2`, `S9W2`, `S9W3`, `S10W1`, `S10W3` deliver no actual variety.
-   Infrastructure is correct; data needs a future differentiation pass.
-2. **S9W2A/B ideal step discrepancy** — `_S9W2A_IDEAL = 110` vs `_S9W2B_IDEAL = 108`
-   for identical rows. One value is wrong. Low priority since both variants play
-   identically.
-3. **Wave code is developer-facing** — `Code: S3W2A` is opaque to casual players.
-   Acceptable for now; could be moved to pause menu / end screen in a future UX pass.
-4. **Batch reload via STAGE_INTRO** — re-rolls A/B variants each time, so two batch
-   loads in the same stage may show different (or identical) wave patterns.
+1. **~10 A/B pool pairs have identical rows** — no actual variety for those slots. Infrastructure correct; data needs a future differentiation pass.
+2. **S9W2A/B ideal step discrepancy** — `_S9W2A_IDEAL = 110` vs `_S9W2B_IDEAL = 108` for identical rows.
+3. **Wave code is developer-facing** — `Code: S3W2A` opaque to casual players; could move to pause/end screen later.
+4. **Batch reload re-rolls A/B variants** — two reloads in the same stage may show different or identical patterns.
 
 ---
 
