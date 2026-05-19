@@ -127,6 +127,7 @@ from constants import (
 )
 from effects import FlashEffects
 from grid_manager import GridManager
+from high_score import MAX_ENTRIES as _HS_MAX_ENTRIES
 from high_score import HighScoreEntry, HighScoreTable
 from player import Player
 from wave_data import STAGE_POOL_SLOTS, STAGES, WAVE_POOLS, WaveData, select_all_waves
@@ -617,7 +618,8 @@ class GameManager:
         """Execute the selected menu item.  0 = Resume, 1 = Restart.
 
         No-op when not in MENU phase so stray calls are harmless.
-        Restart performs a full game reset identical to on_restart_key.
+        Restart performs a full game reset, bypassing the high-score screen
+        (mid-run abandon: the player chose to quit, so no score is recorded).
         """
         if self._phase != GamePhase.MENU:
             return
@@ -989,7 +991,9 @@ class GameManager:
         iq = self._iq_score if self._phase == GamePhase.VICTORY else self._calculate_final_iq()
         assert iq >= 0, f"IQ score {iq} is negative — logic error in _calculate_final_iq"
         rank = self._high_score_table.add(iq, self._stage_index + 1, self._score)
-        assert rank >= -1, f"add() returned unexpected rank {rank}"
+        assert rank == -1 or rank < _HS_MAX_ENTRIES, (
+            f"add() returned rank {rank} outside valid range [-1, {_HS_MAX_ENTRIES})"
+        )
         self._last_score_rank = rank
 
     def _do_restart(self, player: Player) -> None:
