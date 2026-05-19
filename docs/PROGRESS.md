@@ -107,9 +107,13 @@ Steps 3+ are split into **Phase A (Development)** and **Phase B (Testing)** per 
 | 27 | Player-following camera + zoom | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
 | 28 | All waves visible + activation system | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
 | 29 | Stage intro rolling animation (tsunami) | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
-| 30 | Stages 3–10 full progression | APPROVED 2026-05-07 | AWAITING USER | IN PROGRESS |
-| 31 | Graphics rework (1280×720 + aalines) | AWAITING USER | NOT STARTED | IN PROGRESS |
-| 32 | Multi-file stage/wave/grid redesign | AWAITING USER | NOT STARTED | IN PROGRESS |
+| 30 | Stages 3–10 full progression | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 31 | Graphics rework (1280×720 + aalines) | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 32 | Multi-file stage/wave/grid redesign | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 33 | Camera / grid / player persistence redesign | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 34 | Opening feel (PLAYER_SPAWN_Z 21 → 37) | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 35 | Wave variety: distinct W1 openers for all 10 stages | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 36 | Wave pool system, wave codes, crush-retry gate | APPROVED 2026-05-18 | APPROVED 2026-05-18 | APPROVED 2026-05-18 |
 
 **Phase A values:** `NOT STARTED` → `IN PROGRESS` → `AWAITING USER` (code done, panel clean, STEP<N>_REVIEW.md written).
 **Phase B values:** `NOT STARTED` → `IN PROGRESS` (user testing / fix cycle) → `APPROVED <date>`.
@@ -1529,6 +1533,39 @@ Wave pool system, wave codes, and crush-retry gate.
 `uv run mypy --strict .` → success, no issues in 14 source files.
 
 `docs/STEP36_REVIEW.md` written. Awaiting user verification.
+
+---
+
+### Session — 2026-05-18 — Step 36 approved; crush-retry exact-replay fix
+
+Step 36 (wave pool system, wave codes, crush-retry gate) approved by user.
+
+Key revisions implemented across this session (rev7 → rev7b → rev7c):
+
+**rev7 — Crush mechanic redesign:**
+- Crush no longer advances to the next pre-placed wave.  The same wave respawns.
+- Each crush consumes the back-most pending wave as a "life" via
+  `_consume_last_pending_life()` (removes cubes via `remove_pending_in_range`,
+  pops from `_waves`/`_wave_z_starts`/`_wave_mirrors`).
+- When all lives are gone, `_post_rising_reload` → `_reload_remaining_waves` →
+  STAGE_INTRO with fresh pool variants for remaining needed slots.
+
+**rev7b — Exact-replay guarantee:**
+- `_spawn_all_waves_pending` now rolls each wave's mirror flag once and stores
+  it in `self._wave_mirrors: list[bool]`.
+- `_respawn_current_slot` uses the stored WaveData and mirror with zero new
+  randomness — byte-identical cube layout on every retry.
+
+**rev7c — Expert panel fixes:**
+- Code Quality BLOCKING: removed dead `player: Player` parameter from
+  `_spawn_all_waves_pending` and its 3 call sites.
+- UX B2: added `trigger_shake(amplitude=5.0, duration=0.25)` in
+  `_consume_last_pending_life` to signal life-consumed to the player.
+
+Panel: Vision Lead APPROVED, Code Quality APPROVED, Platform Engineer APPROVED,
+UX Tester APPROVED WITH ADVISORY (lives-remaining indicator filed as future enhancement).
+
+**Step 36 APPROVED 2026-05-18.**
 
 ---
 
