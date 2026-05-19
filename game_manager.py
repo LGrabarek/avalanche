@@ -127,6 +127,7 @@ from constants import (
 )
 from effects import FlashEffects
 from grid_manager import GridManager
+from high_score import HighScoreEntry, HighScoreTable
 from player import Player
 from wave_data import STAGE_POOL_SLOTS, STAGES, WAVE_POOLS, WaveData, select_all_waves
 from wave_manager import Cube, WaveManager
@@ -223,6 +224,12 @@ class GameManager:
         # End-screen hold timer — counts up from 0 on entry to GAME_OVER/VICTORY.
         # Restart key is blocked until this reaches END_SCREEN_HOLD seconds.
         self._end_hold_elapsed: float = 0.0
+        # High score table — persists across restarts; never reset in _reset_state.
+        # Populated from browser localStorage on construction; saves on each new entry.
+        self._high_score_table: HighScoreTable = HighScoreTable()
+        # 0-based rank of the most recently inserted score (-1 = not in table).
+        # Set by _insert_score; read by the HIGH_SCORE overlay for highlighting.
+        self._last_score_rank: int = -1
         assert self._score == 0, "score must start at zero"
         assert self._phase == GamePhase.WAVE_ACTIVE, "phase must start WAVE_ACTIVE"
 
@@ -342,6 +349,16 @@ class GameManager:
         skips when the end condition fires mid-keypress.
         """
         return self._end_hold_elapsed >= END_SCREEN_HOLD
+
+    @property
+    def high_score_entries(self) -> tuple[HighScoreEntry, ...]:
+        """Ordered high-score entries, highest IQ first (up to 10 entries)."""
+        return self._high_score_table.entries
+
+    @property
+    def last_score_rank(self) -> int:
+        """0-based rank of the most recently submitted score, or -1 if not ranked."""
+        return self._last_score_rank
 
     @property
     def active_wave_width(self) -> int:
@@ -573,7 +590,7 @@ class GameManager:
     # Phases from which the pause menu may NOT be opened.
     _MENU_BLOCKED: frozenset[GamePhase] = frozenset({
         GamePhase.TITLE, GamePhase.GAME_OVER, GamePhase.VICTORY,
-        GamePhase.STAGE_CLEAR, GamePhase.MENU,
+        GamePhase.STAGE_CLEAR, GamePhase.MENU, GamePhase.HIGH_SCORE,
     })
 
     def on_menu_open(self) -> None:
@@ -867,16 +884,32 @@ class GameManager:
         self.start_first_wave(player, all_stage_waves[0])
 
     def on_restart_key(self, player: Player) -> None:
-        """Reset all game state and return to TITLE on any key during GAME_OVER/VICTORY.
+        """Insert score into the high-score table and show it after GAME_OVER/VICTORY.
 
         No-op in every other phase so stray keypresses are harmless. Also no-op
-        during the initial END_SCREEN_HOLD seconds to prevent accidental restarts
+        during the initial END_SCREEN_HOLD seconds to prevent accidental skips
         triggered by a key held at the moment the end screen appears.
+
+        The game is NOT restarted here — that happens in on_high_score_key once
+        the player has seen the table and pressed another key.
         """
         if self._phase not in (GamePhase.GAME_OVER, GamePhase.VICTORY):
             return
         if self._end_hold_elapsed < END_SCREEN_HOLD:
             return  # hold not yet elapsed; ignore this keypress
+        self._insert_score()
+        self._end_hold_elapsed = 0.0
+        self._phase = GamePhase.HIGH_SCORE
+
+    def on_high_score_key(self, player: Player) -> None:
+        """Restart the game from the high-score screen (any key press).
+
+        No-op outside HIGH_SCORE so stray keypresses during transitions are
+        harmless.  Delegates to _do_restart which re-rolls the pool selection
+        and re-enters TITLE.
+        """
+        if self._phase != GamePhase.HIGH_SCORE:
+            return
         assert len(STAGES) > 0, "STAGES must not be empty"
         self._do_restart(player)
 
@@ -944,6 +977,21 @@ class GameManager:
         self._intro_elapsed = 0.0
         self._phase = GamePhase.STAGE_INTRO
 
+    def _insert_score(self) -> None:
+        """Compute the final IQ score and add it to the high-score table.
+
+        For VICTORY the IQ is already stored in _iq_score.  For GAME_OVER it
+        is computed on-demand from the current grid and score state (same
+        formula as VICTORY but with the partial progress at time of death).
+        The resulting rank is stored in _last_score_rank for the overlay to
+        highlight (-1 means the score did not qualify for the top 10).
+        """
+        iq = self._iq_score if self._phase == GamePhase.VICTORY else self._calculate_final_iq()
+        assert iq >= 0, f"IQ score {iq} is negative — logic error in _calculate_final_iq"
+        rank = self._high_score_table.add(iq, self._stage_index + 1, self._score)
+        assert rank >= -1, f"add() returned unexpected rank {rank}"
+        self._last_score_rank = rank
+
     def _do_restart(self, player: Player) -> None:
         """Full reset sequence shared by on_restart_key and on_menu_select (Restart).
 
@@ -988,6 +1036,7 @@ class GameManager:
         self._clean_clears = 0        # cleared; no clean clears counted yet
         self._wave_z_starts = []
         self._wave_mirrors = []
+        self._last_score_rank = -1  # reset highlight; _high_score_table is NOT reset
         self._forbidden_captured = False
         self._had_avalanche = False
         self._player_steps = 0

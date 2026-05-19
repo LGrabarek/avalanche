@@ -53,6 +53,7 @@ from effects import FlashEffects
 from fonts import load_font
 from game_manager import GameManager
 from grid_manager import GridManager
+from high_score import MAX_ENTRIES as _HS_MAX_ENTRIES
 from hud import Hud
 from player import Player
 from renderer import ProjectedFace, Renderer
@@ -316,8 +317,10 @@ def _drain_events(
         elif event.type == pygame.KEYDOWN and not paused:
             if game.phase == GamePhase.TITLE:
                 game.on_title_advance()  # any key starts the game from the title screen
+            elif game.phase == GamePhase.HIGH_SCORE:
+                game.on_high_score_key(player)  # any key restarts from TITLE
             elif game.phase in (GamePhase.GAME_OVER, GamePhase.VICTORY):
-                game.on_restart_key(player)  # any key restarts from TITLE
+                game.on_restart_key(player)  # any key → insert score → HIGH_SCORE
             elif game.phase == GamePhase.STAGE_CLEAR:
                 game.on_stage_clear_key(player)  # any key advances to next stage
             elif game.phase == GamePhase.MENU:
@@ -466,7 +469,7 @@ def _draw_game_over_overlay(
     lines: tuple[str, ...] = (
         "GAME OVER",
         f"Score: {game.score}",
-        "Press any key to restart",
+        "Press any key to continue",
     )
     assert len(lines) == 3, "game_over overlay line count changed — update assertion"
     prompt_color: tuple[int, int, int] = (140, 140, 140) if hold_ready else (50, 50, 55)
@@ -537,7 +540,7 @@ def _draw_victory_overlay(
         "GAME CLEAR",
         f"Score: {game.score}",
         f"I.Q.: {game.iq_score}",
-        "Press any key to restart",
+        "Press any key to continue",
     )
     assert len(lines) == 4, "victory overlay line count changed — update assertion"
     prompt_color: tuple[int, int, int] = (140, 140, 140) if hold_ready else (50, 50, 55)
@@ -554,6 +557,71 @@ def _draw_victory_overlay(
         surface = font.render(text, True, colors[i])
         cx = (SCREEN_WIDTH - surface.get_width()) // 2
         _ = screen.blit(surface, (cx, start_y + i * line_h))  # no dirty-rect
+
+
+# --- High score overlay -------------------------------------------------------
+
+_HS_COL_XS: tuple[int, int, int] = (
+    SCREEN_WIDTH // 2 - 220,   # rank column centre
+    SCREEN_WIDTH // 2,          # IQ column centre
+    SCREEN_WIDTH // 2 + 200,   # stage column centre
+)
+_HS_HEADERS: tuple[str, str, str] = ("RANK", "I.Q.", "STAGE")
+
+
+def _draw_high_score_overlay(
+    screen: pygame.Surface,
+    big_font: pygame.font.Font,
+    small_font: pygame.font.Font,
+    game: GameManager,
+) -> None:
+    """Full-screen high score table: title, top-10 list with new entry highlighted.
+
+    Shown in the HIGH_SCORE phase after GAME_OVER or VICTORY.  The entry that
+    was just inserted is drawn in gold with a '>' prefix; all others are grey.
+    An empty table (no qualifying run yet) shows a placeholder message.
+    """
+    entries = game.high_score_entries
+    last_rank = game.last_score_rank
+    assert len(entries) <= _HS_MAX_ENTRIES, (
+        f"high score entry count {len(entries)} exceeds _HS_MAX_ENTRIES"
+    )
+    veil = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    veil.fill((0, 0, 0, 220))
+    _ = screen.blit(veil, (0, 0))
+
+    cx = SCREEN_WIDTH // 2
+    line_h = big_font.size("A")[1]
+    small_h = small_font.size("A")[1]
+
+    title = big_font.render("HIGH SCORES", True, (255, 215, 0))
+    _ = screen.blit(title, title.get_rect(centerx=cx, top=36))
+
+    header_y = 36 + line_h + 14
+    for hdr, hx in zip(_HS_HEADERS, _HS_COL_XS, strict=True):
+        hs = small_font.render(hdr, True, (140, 140, 170))
+        _ = screen.blit(hs, hs.get_rect(centerx=hx, top=header_y))
+
+    row_y = header_y + small_h + 10
+    row_h = small_h + 8
+    if not entries:
+        empty = small_font.render("No scores yet — play to set a record!", True, (100, 100, 120))
+        _ = screen.blit(empty, empty.get_rect(centerx=cx, top=row_y))
+    else:
+        for rank, entry in enumerate(entries):
+            color = (255, 215, 0) if rank == last_rank else (190, 190, 200)
+            rank_str = f"> {rank + 1}" if rank == last_rank else f"{rank + 1:>2}."
+            cells = (
+                small_font.render(rank_str, True, color),
+                small_font.render(str(entry.iq_score), True, color),
+                small_font.render(f"Stage {entry.stage_reached}", True, color),
+            )
+            for surf, hx in zip(cells, _HS_COL_XS, strict=True):
+                _ = screen.blit(surf, surf.get_rect(centerx=hx, top=row_y))
+            row_y += row_h
+
+    prompt = small_font.render("Press any key to play again", True, (110, 110, 130))
+    _ = screen.blit(prompt, prompt.get_rect(centerx=cx, bottom=SCREEN_HEIGHT - 28))
 
 
 # --- Camera -------------------------------------------------------------------
@@ -676,7 +744,7 @@ async def main() -> None:
         frozen = game.phase in (
             GamePhase.TITLE, GamePhase.STAGE_INTRO, GamePhase.WAVE_RISING,
             GamePhase.GAME_OVER, GamePhase.VICTORY,
-            GamePhase.STAGE_CLEAR, GamePhase.MENU,
+            GamePhase.STAGE_CLEAR, GamePhase.MENU, GamePhase.HIGH_SCORE,
         )
         if not paused and not frozen:
             held_keys = pygame.key.get_pressed()
@@ -745,6 +813,8 @@ async def main() -> None:
             _draw_stage_clear_overlay(screen, font, game, game.end_hold_ready)
         elif game.phase == GamePhase.VICTORY:
             _draw_victory_overlay(screen, font, game, game.end_hold_ready)
+        elif game.phase == GamePhase.HIGH_SCORE:
+            _draw_high_score_overlay(screen, overlay_font, font, game)
 
         pygame.display.flip()
         await asyncio.sleep(0)  # CRITICAL: yield to browser rAF

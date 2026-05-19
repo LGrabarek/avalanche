@@ -310,6 +310,7 @@ class GamePhase(Enum):
     VICTORY = "victory"
     STAGE_CLEAR = "stage_clear"  # Between-stage screen; all gameplay frozen
     MENU = "menu"           # Esc pause menu open; all gameplay frozen
+    HIGH_SCORE = "high_score"   # Top-10 table shown after GAME_OVER / VICTORY
 
 
 # --- Registry TypedDicts ------------------------------------------------------
