@@ -41,7 +41,6 @@ from constants import GRID_DEPTH, GRID_WIDTH, CubeType
 _N = CubeType.NORMAL
 _A = CubeType.ADVANTAGE
 _F = CubeType.FORBIDDEN
-_X: None = None   # empty column
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +53,7 @@ class WaveData:
     def __init__(
         self,
         code: str,
-        rows: tuple[tuple[CubeType | None, ...], ...],
+        rows: tuple[tuple[CubeType, ...], ...],
         ideal_steps: int,
     ) -> None:
         if not code:
@@ -78,7 +77,7 @@ class WaveData:
                 f"wave has {len(rows)} rows, exceeds GRID_DEPTH {GRID_DEPTH}"
             )
         self._code: str = code
-        self._rows: tuple[tuple[CubeType | None, ...], ...] = rows
+        self._rows: tuple[tuple[CubeType, ...], ...] = rows
         self._ideal_steps: int = ideal_steps
 
     @property
@@ -98,7 +97,11 @@ class WaveData:
         mirror: bool = False,
         z_start: int | None = None,
     ) -> list[tuple[int, int, CubeType]]:
-        """Return `(grid_x, grid_z, cube_type)` for every cube in the wave."""
+        """Return `(grid_x, grid_z, cube_type)` for every cube in the wave.
+
+        Every cell in every row must be a CubeType (no None allowed); this is
+        enforced by __init__ so no cell is ever skipped here.
+        """
         if z_start is not None and not (0 <= z_start < GRID_DEPTH):
             raise ValueError(
                 f"z_start {z_start} outside [0, {GRID_DEPTH})"
@@ -109,8 +112,6 @@ class WaveData:
         for row_idx, row in enumerate(self._rows):
             grid_z = (GRID_DEPTH - 1 - row_idx) if z_start is None else (z_start - row_idx)
             for col, cube_type in enumerate(row):
-                if cube_type is None:
-                    continue
                 grid_x = (row_width - 1 - col) if mirror else col
                 assert len(positions) < max_positions, (
                     "spawn_positions exceeded theoretical maximum — row data corrupted"
@@ -119,12 +120,17 @@ class WaveData:
         return positions
 
     def target_cube_count(self) -> int:
-        """Count NORMAL + ADVANTAGE cubes (the Perfect-detection targets)."""
-        count = 0
-        for row in self._rows:
-            for cube_type in row:
-                if cube_type in (CubeType.NORMAL, CubeType.ADVANTAGE):
-                    count += 1
+        """Count NORMAL + ADVANTAGE cubes (the Perfect-detection targets).
+
+        FORBIDDEN cubes are intentionally excluded — the player is meant to
+        let them fall off the front edge, not capture them.
+        """
+        count = sum(
+            1
+            for row in self._rows
+            for cube_type in row
+            if cube_type in (CubeType.NORMAL, CubeType.ADVANTAGE)
+        )
         assert count >= 0, "target_cube_count went negative — logic error"
         return count
 
@@ -134,23 +140,22 @@ class WaveData:
 # ---------------------------------------------------------------------------
 
 # S1W0 — A variant: all-Normal intro
-_S1W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
 _S1W0A_IDEAL: int = 28
 
-# S1W0 — B variant: gap at col3, rest Normal
-# back: 6N (no col3); front: 7N
-# back: 6×2=12; front: 14. total=26
-_S1W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _N, _X, _N, _N, _N),
+# S1W0 — B variant: all-Normal (both rows fully packed)
+# back: 7N = 14; front: 7N = 14. total=28
+_S1W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
+    (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
-_S1W0B_IDEAL: int = 26
+_S1W0B_IDEAL: int = 28
 
 # S1W1 — A variant: A at col3 (centre back)
-_S1W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _N, _A, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
@@ -158,14 +163,14 @@ _S1W1A_IDEAL: int = 25
 
 # S1W1 — B variant: A at col1
 # A@1→N@0,N@2 (3); N@3,4,5,6 individual (4×2=8); front: 14. total=25
-_S1W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
 _S1W1B_IDEAL: int = 25
 
 # S1W2 — A variant: A@1,5 + F@3
-_S1W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
@@ -173,14 +178,14 @@ _S1W2A_IDEAL: int = 20
 
 # S1W2 — B variant: A@0,6 + F@3
 # A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10; front=14. total=24
-_S1W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _F, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
 )
 _S1W2B_IDEAL: int = 24
 
 # S1W3 — A variant: A@0,6 + F@2,4
-_S1W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _F, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
 )
@@ -188,7 +193,7 @@ _S1W3A_IDEAL: int = 26
 
 # S1W3 — B variant: A@0,6 + F@2 only
 # A@0→N@1 (3); A@6→N@5 (3); N@3,N@4 individual (2×2=4); back=10; front=14. total=24
-_S1W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S1W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
 )
@@ -200,7 +205,7 @@ _S1W3B_IDEAL: int = 24
 # ---------------------------------------------------------------------------
 
 # S2W0 — A variant: A at col2 (off-centre)
-_S2W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _A, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -209,7 +214,7 @@ _S2W0A_IDEAL: int = 39
 
 # S2W0 — B variant: A at col4
 # A@4→N@3,N@5 (3); N@0,1,2,6 individual (4×2=8); back=11; mid=14; front=14. total=39
-_S2W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _N, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -217,7 +222,7 @@ _S2W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S2W0B_IDEAL: int = 39
 
 # S2W1 — A variant: A@1,5 + F@3
-_S2W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -226,7 +231,7 @@ _S2W1A_IDEAL: int = 32
 
 # S2W1 — B variant: A@0,6 + F@3
 # A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10; mid=14; front=14. total=38
-_S2W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _F, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -234,7 +239,7 @@ _S2W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S2W1B_IDEAL: int = 38
 
 # S2W2 — A variant: A@1,3,5
-_S2W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _A, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -244,7 +249,7 @@ _S2W2A_IDEAL: int = 37
 # S2W2 — B variant: A@0,2,4
 # A@0→N@1(3); A@2→N@1(gone),N@3(3); A@4→N@3(gone),N@5(3); N@6 individual(2).
 # back=11; mid=14; front=14. total=39.
-_S2W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _A, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -252,7 +257,7 @@ _S2W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S2W2B_IDEAL: int = 39
 
 # S2W3 — A variant: A@0,6 + F@2,4
-_S2W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _F, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -261,7 +266,7 @@ _S2W3A_IDEAL: int = 36
 
 # S2W3 — B variant: A@0,6 + F@2
 # A@0→N@1 (3); A@6→N@5 (3); N@3,N@4 individual (2×2=4); back=10; mid=14; front=14. total=38
-_S2W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S2W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -274,7 +279,7 @@ _S2W3B_IDEAL: int = 38
 # ---------------------------------------------------------------------------
 
 # S3W0 — A variant: F@0,6 + A@3
-_S3W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _N, _A, _N, _N, _F),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -284,7 +289,7 @@ _S3W0A_IDEAL: int = 35
 # S3W0 — B variant: F@0,6 + A@2
 # |2-0|=2 ✓, |2-6|=4 ✓
 # A@2→N@1,N@3 (3); N@4,N@5 individual (2×2=4); back=7; mid=14; front=14. total=35
-_S3W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _N, _N, _F),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -292,7 +297,7 @@ _S3W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S3W0B_IDEAL: int = 35
 
 # S3W1 — A variant: A@1,5 + F@3 back; F@2,4 mid; 7N front
-_S3W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -304,7 +309,7 @@ _S3W1A_IDEAL: int = 30
 # back: A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10
 # mid: F@1,F@5 fall; 5N individual (5×2=10)
 # front: 14. total=34
-_S3W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _F, _N, _N, _A),
     (_N, _F, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -312,7 +317,7 @@ _S3W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S3W1B_IDEAL: int = 34
 
 # S3W2 — A variant: A@1,5 + F@3 back; A@0,6 + F@2,4 mid; 7N front
-_S3W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_A, _N, _F, _N, _F, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -323,7 +328,7 @@ _S3W2A_IDEAL: int = 28
 # back (was mid of A): A@0→N@1 (3); A@6→N@5 (3); F@2,4 fall; N@3 individual (2). back=8
 # mid (was back of A): A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); F@3 falls. mid=6
 # front: 14. total=28
-_S3W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -331,7 +336,7 @@ _S3W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S3W2B_IDEAL: int = 28
 
 # S3W3 — A variant: A@2,4 + F@0,6 back; A@3 + F@1,5 mid; A@2,4 + F@0,6 front
-_S3W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _F, _N),
     (_F, _N, _A, _N, _A, _N, _F),
@@ -344,7 +349,7 @@ _S3W3A_IDEAL: int = 19
 # mid: A@3→N@2,N@4 (3); N@0,N@6 individual (2×2=4). mid=7
 # front: A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); F@3 falls. front=6
 # total=19
-_S3W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S3W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _F, _N),
     (_N, _A, _N, _F, _N, _A, _N),
@@ -356,27 +361,28 @@ _S3W3B_IDEAL: int = 19
 # Stage 4 — 4 rows × 7 cols
 # ---------------------------------------------------------------------------
 
-# S4W0 — A variant: A@1 + gap@3 back; 3×7N
-_S4W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _A, _N, _X, _N, _N, _N),
+# S4W0 — A variant: A@1 back (fully packed); 3×7N
+# A@1→N@0,N@2 (3); N@3,4,5,6 individual (4×2=8); back=11; 3×14=42. total=53
+_S4W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
+    (_N, _A, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
-_S4W0A_IDEAL: int = 51
+_S4W0A_IDEAL: int = 53
 
-# S4W0 — B variant: A@5 + gap@3 back; 3×7N (right-skewed)
-# A@5→N@4,N@6 (3); N@0,1,2 individual (3×2=6); back=9; 3×14=42. total=51
-_S4W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
-    (_N, _N, _N, _X, _N, _A, _N),
+# S4W0 — B variant: A@5 back (fully packed); 3×7N (right-skewed)
+# A@5→N@4,N@6 (3); N@0,1,2,3 individual (4×2=8); back=11; 3×14=42. total=53
+_S4W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
+    (_N, _N, _N, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
 )
-_S4W0B_IDEAL: int = 51
+_S4W0B_IDEAL: int = 53
 
 # S4W1 — A variant: A@1,5 + F@3 back; F@2,4 mid-1; 2×7N
-_S4W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -387,7 +393,7 @@ _S4W1A_IDEAL: int = 44
 # S4W1 — B variant: A@0,6 + F@3 back; F@2,4 mid-1; 2×7N
 # A@0→N@1 (3); A@6→N@5 (3); N@2,N@4 individual (2×2=4); back=10
 # mid-1: 5N+2F, 5×2=10; 2×14=28. total=48
-_S4W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _F, _N, _N, _A),
     (_N, _N, _F, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -396,7 +402,7 @@ _S4W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S4W1B_IDEAL: int = 48
 
 # S4W2 — A variant: A@0,6 + F@2,4 back; F@2,4 mid-1; F@1,5 mid-2; 7N front
-_S4W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _F, _N, _A),
     (_N, _N, _F, _N, _F, _N, _N),
     (_N, _F, _N, _N, _N, _F, _N),
@@ -407,7 +413,7 @@ _S4W2A_IDEAL: int = 42
 # S4W2 — B variant: A@1,5 + F@3 back; F@1,5 mid-1; 2×7N
 # back: A@1→N@0,N@2 (3); A@5→N@4,N@6 (3); back=6
 # mid-1: F@1,5 fall; 5N individual (5×2=10); 2×14=28. total=44
-_S4W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _F, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N),
@@ -416,7 +422,7 @@ _S4W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S4W2B_IDEAL: int = 44
 
 # S4W3 — A variant: F@0,6+A@2,4 back; A@1,5+F@3 mid-1; F@2,4 mid-2; A@3 front
-_S4W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _F, _N, _N),
@@ -428,7 +434,7 @@ _S4W3A_IDEAL: int = 33
 # (same structure, different front: A@3 same but different mid-2)
 # back: 2×3=6. mid-1: 2×3=6. mid-2: 5×2=10. front: A@3→N@2,N@4(3); N@0,1,5,6(4×2=8)=11.
 # total=33
-_S4W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S4W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _F, _N, _N),
@@ -442,7 +448,7 @@ _S4W3B_IDEAL: int = 33
 # ---------------------------------------------------------------------------
 
 # S5W0 — A variant: A@2,6 back; 3×9N
-_S5W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _A, _N, _N, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -452,7 +458,7 @@ _S5W0A_IDEAL: int = 66
 
 # S5W0 — B variant: A@3,6 back; 3×9N
 # A@3→N@2,N@4 (3); A@6→N@5,N@7 (3); N@0,N@1,N@8 individual (3×2=6); back=12; 3×18=54. total=66
-_S5W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _N, _A, _N, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -461,7 +467,7 @@ _S5W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S5W0B_IDEAL: int = 66
 
 # S5W1 — A variant: A@1,7 + F@4 back; F@2,6 mid-1; 2×9N
-_S5W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _F, _N, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -473,7 +479,7 @@ _S5W1A_IDEAL: int = 58
 # |0-4|=4 ✓, |8-4|=4 ✓
 # back: A@0→N@1 (3); A@8→N@7 (3); N@2,3,5,6 individual (4×2=8); back=14
 # mid-1: F@1,7 fall; 7N individual (7×2=14); 2×18=36. total=64
-_S5W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _N, _F, _N, _N, _N, _A),
     (_N, _F, _N, _N, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -482,7 +488,7 @@ _S5W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S5W1B_IDEAL: int = 64
 
 # S5W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; 9N front
-_S5W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -494,7 +500,7 @@ _S5W2A_IDEAL: int = 50
 # |1-3|=2 ✓, |7-5|=2 ✓
 # back: A@1→N@0,N@2 (3); A@7→N@6,N@8 (3); F@3,5 fall. back=6
 # mid-1: F@2,6 fall; 7N individual (7×2=14); 2×18=36. total=56
-_S5W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -503,7 +509,7 @@ _S5W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S5W2B_IDEAL: int = 56
 
 # S5W3 — A variant: F@0,4+A@2,6 back; F@1,7+A@3,5 mid-1; F@2,6 mid-2; F@0,8+A@4 front
-_S5W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _A, _N, _F, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -519,7 +525,7 @@ _S5W3A_IDEAL: int = 41
 # mid-2: 7N+2F, 7×2=14
 # front: A@4→N@3,N@5 (3); N@1,2,6,7 individual (4×2=8). front=11
 # total=6+10+14+11=41
-_S5W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S5W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _A, _N, _F, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -533,7 +539,7 @@ _S5W3B_IDEAL: int = 41
 # ---------------------------------------------------------------------------
 
 # S6W0 — A variant: A@1,7 + F@4 back; 4×9N
-_S6W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _F, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -546,7 +552,7 @@ _S6W0A_IDEAL: int = 82
 # |2-4|=2 ✓, |6-4|=2 ✓
 # back: A@2→N@1,N@3 (3); A@6→N@5,N@7 (3); N@0,N@8 individual (2×2=4); F@4 falls. back=10
 # 4×18=72. total=82
-_S6W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _A, _N, _F, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -556,7 +562,7 @@ _S6W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S6W0B_IDEAL: int = 82
 
 # S6W1 — A variant: A@1,7 + F@3,5 back; F@3,5 mid-1; 3×9N
-_S6W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _F, _N, _F, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -569,7 +575,7 @@ _S6W1A_IDEAL: int = 74
 # |0-3|=3 ✓, |8-5|=3 ✓
 # back: A@0→N@1 (3); A@8→N@7 (3); N@2,N@6 individual (2×2=4); F@3,5 fall. back=10
 # mid-1: 7N+2F, 7×2=14; 3×18=54. total=78
-_S6W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _F, _N, _F, _N, _N, _A),
     (_N, _N, _N, _F, _N, _F, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -579,7 +585,7 @@ _S6W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S6W1B_IDEAL: int = 78
 
 # S6W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; 2×9N
-_S6W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -593,7 +599,7 @@ _S6W2A_IDEAL: int = 68
 # back: A@0→N@1(3); A@8→N@7(3); N@3,4,5(3×2=6); F@2,6 fall. back=12
 # mid-1: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. mid-1=6
 # mid-2: 7N+2F, 7×2=14. 2×18=36. total=68
-_S6W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -603,7 +609,7 @@ _S6W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S6W2B_IDEAL: int = 68
 
 # S6W3 — A variant: F@0,4+A@2,6 back; A@3,5+F@1,7 mid-1; F@2,6 mid-2; F@3,5 mid-3; 9N front
-_S6W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _A, _N, _F, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -615,7 +621,7 @@ _S6W3A_IDEAL: int = 62
 # S6W3 — B variant: same pattern (identical structure)
 # back: 2×3=6. mid-1: A@3→N@2,N@4(3); A@5→N@4(gone),N@6(3); N@0,N@8(4). mid-1=10.
 # mid-2: 14. mid-3: 14. front: 18. total=62
-_S6W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S6W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _F, _N, _A, _N, _A, _N, _F, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -630,7 +636,7 @@ _S6W3B_IDEAL: int = 62
 # ---------------------------------------------------------------------------
 
 # S7W0 — A variant: F@1,7 back; 4×9N
-_S7W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _F, _N, _N, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -641,7 +647,7 @@ _S7W0A_IDEAL: int = 86
 
 # S7W0 — B variant: F@0,8 back (edge-adjacent); 4×9N
 # 7N in back, F@0,8 fall. back=7×2=14. 4×18=72. total=86
-_S7W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _N, _N, _N, _N, _N, _N, _F),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -651,7 +657,7 @@ _S7W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S7W0B_IDEAL: int = 86
 
 # S7W1 — A variant: A@1,7 + F@3,5 back; F@2,6 mid-1; 3×9N
-_S7W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -663,7 +669,7 @@ _S7W1A_IDEAL: int = 74
 # S7W1 — B variant: A@1,7 + F@3,5 back; F@3,5 mid-1; 3×9N
 # back: A@1→N@0,N@2(3); A@7→N@6,N@8(3); back=6
 # mid-1: 7N+2F, 7×2=14; 3×18=54. total=74
-_S7W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _F, _N, _F, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -673,7 +679,7 @@ _S7W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S7W1B_IDEAL: int = 74
 
 # S7W2 — A variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@2,6 mid-2; F@3,5 mid-3; 9N front
-_S7W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -684,7 +690,7 @@ _S7W2A_IDEAL: int = 64
 
 # S7W2 — B variant: A@0,8 + F@2,6 back; A@1,7 + F@3,5 mid-1; F@3,5 mid-2; 2×9N
 # back: 12. mid-1: 6. mid-2: 7×2=14. 2×18=36. total=68
-_S7W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _F, _N, _F, _N, _N, _N),
@@ -694,7 +700,7 @@ _S7W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S7W2B_IDEAL: int = 68
 
 # S7W3 — A variant: F@0,4+A@2,6 back; A@1,7+F@3,5 mid-1; F@0,8+A@4 mid-2; F@2,6 mid-3; A@4 front
-_S7W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_F, _N, _N, _N, _A, _N, _N, _N, _F),
@@ -710,7 +716,7 @@ _S7W3A_IDEAL: int = 52
 # mid-3: 7×2=14. front: 9×2=18. total=6+12+11+14+... wait that is too many rows.
 # Use 4 special rows + 1 normal: back+mid-1+mid-2+mid-3+front
 # total=6+6+11+14+18=55
-_S7W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S7W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_F, _N, _N, _N, _A, _N, _N, _N, _F),
@@ -725,7 +731,7 @@ _S7W3B_IDEAL: int = 55
 # ---------------------------------------------------------------------------
 
 # S8W0 — A variant: A@0 back; 5×9N
-_S8W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -737,7 +743,7 @@ _S8W0A_IDEAL: int = 107
 
 # S8W0 — B variant: A@8 back (far-right corner); 5×9N
 # A@8→N@7(3); N@0..6(7×2=14). back=17. 5×18=90. total=107
-_S8W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _N, _N, _N, _N, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -748,7 +754,7 @@ _S8W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S8W0B_IDEAL: int = 107
 
 # S8W1 — A variant: A@1,7 + F@3,5 back; 5×9N
-_S8W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -760,7 +766,7 @@ _S8W1A_IDEAL: int = 96
 
 # S8W1 — B variant: A@1,7 + F@3,5 back (centre F variant); 5×9N
 # back: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. back=6. 5×18=90. total=96
-_S8W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -771,7 +777,7 @@ _S8W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S8W1B_IDEAL: int = 96
 
 # S8W2 — A variant: A@0,8 + F@2,6 back; A@1,7+F@3,5 mid-1; 4×9N
-_S8W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -784,7 +790,7 @@ _S8W2A_IDEAL: int = 90
 # S8W2 — B variant: A@0,8+F@2,6 back; A@1,7+F@3,5 mid-1 (identical to A — same ideal)
 # back: A@0→N@1(3); A@8→N@7(3); N@3,4,5(3×2=6); F@2,6 fall. back=12
 # mid-1: A@1→N@0,N@2(3); A@7→N@6,N@8(3); F@3,5 fall. mid-1=6. 4×18=72. total=90
-_S8W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _F, _N, _A),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -795,7 +801,7 @@ _S8W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S8W2B_IDEAL: int = 90
 
 # S8W3 — A variant: F@0,4+A@2,6 back; A@1,7+F@3,5 mid-1; F@2,6 mid-2; F@3,5 mid-3; 2×9N
-_S8W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_N, _N, _F, _N, _N, _N, _F, _N, _N),
@@ -809,7 +815,7 @@ _S8W3A_IDEAL: int = 76
 # back: 2×3=6. mid-1: 2×3=6.
 # mid-2: A@4→N@3,N@5(3); N@1,2,6,7(4×2=8). mid-2=11.
 # mid-3: 7×2=14. 2×18=36. total=6+6+11+14+36=73
-_S8W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S8W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _A, _N, _F),
     (_N, _A, _N, _F, _N, _F, _N, _A, _N),
     (_F, _N, _N, _N, _A, _N, _N, _N, _F),
@@ -825,7 +831,7 @@ _S8W3B_IDEAL: int = 73
 # ---------------------------------------------------------------------------
 
 # S9W0 — A variant: F@1,9 + A@5 back; 5×11N
-_S9W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _F, _N, _N, _N, _A, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -838,7 +844,7 @@ _S9W0A_IDEAL: int = 125
 # S9W0 — B variant: F@1,9 + A@4 back; 5×11N
 # |4-1|=3 ✓, |4-9|=5 ✓
 # A@4→N@3,N@5(3); N@0,N@2,N@6,N@7,N@8,N@10(6×2=12); F@1,9 fall. back=15. 5×22=110. total=125
-_S9W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _F, _N, _N, _A, _N, _N, _N, _N, _F, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -849,7 +855,7 @@ _S9W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S9W0B_IDEAL: int = 125
 
 # S9W1 — A variant: A@1,9 + F@4,6 back; 5×11N
-_S9W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -862,7 +868,7 @@ _S9W1A_IDEAL: int = 120
 # S9W1 — B variant: A@0,10 + F@4,6 back; 5×11N
 # |0-4|=4 ✓, |10-6|=4 ✓
 # A@0→N@1(3); A@10→N@9(3); N@2,3,7,8(4×2=8); F@4,6 fall. back=14. 5×22=110. total=124
-_S9W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _N, _N, _F, _N, _F, _N, _N, _N, _A),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -873,7 +879,7 @@ _S9W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S9W1B_IDEAL: int = 124
 
 # S9W2 — A variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 4×11N
-_S9W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -886,7 +892,7 @@ _S9W2A_IDEAL: int = 110
 # S9W2 — B variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 4×11N
 # back: A@0→N@1(3); A@10→N@9(3); N@3,4,5,6(4×2=8); F@2,8 fall. back=14.
 # mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6. 4×22=88. total=108
-_S9W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -897,7 +903,7 @@ _S9W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S9W2B_IDEAL: int = 108
 
 # S9W3 — A variant: F@0,4,6,10 + A@2,8 back; A@2,8 + F@4,6 mid-1; F@2,8 mid-2; F@3,6 mid-3; 2×11N
-_S9W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
@@ -911,7 +917,7 @@ _S9W3A_IDEAL: int = 92
 # back: A@2→N@1,N@3(3); A@8→N@7,N@9(3). back=6.
 # mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6.
 # mid-2: 9×2=18. mid-3: 9×2=18. 2×22=44. total=92
-_S9W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S9W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
@@ -927,7 +933,7 @@ _S9W3B_IDEAL: int = 92
 # ---------------------------------------------------------------------------
 
 # S10W0 — A variant: A@2,5,8 back; 6×11N
-_S10W0A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W0A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _N, _A, _N, _N, _A, _N, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -941,7 +947,7 @@ _S10W0A_IDEAL: int = 145
 # S10W0 — B variant: A@1,4,6,9 back; 6×11N
 # A@1→N@0,N@2(3); A@4→N@3,N@5(3); A@6→N@5(gone),N@7(3); A@9→N@8,N@10(3).
 # back=12; 6×22=132. total=144.
-_S10W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W0B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _A, _N, _A, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -953,7 +959,7 @@ _S10W0B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S10W0B_IDEAL: int = 144
 
 # S10W1 — A variant: A@1,9 + F@4,6 back; 6×11N
-_S10W1A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W1A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -966,7 +972,7 @@ _S10W1A_IDEAL: int = 142
 
 # S10W1 — B variant: A@1,9 + F@4,6 back (same layout, different ideal due to cols)
 # A@1→N@0,N@2(3); A@9→N@8,N@10(3); N@3,7(2×2=4); F@4,6 fall. back=10. 6×22=132. total=142
-_S10W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W1B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_N, _A, _N, _N, _F, _N, _F, _N, _N, _A, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -978,7 +984,7 @@ _S10W1B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S10W1B_IDEAL: int = 142
 
 # S10W2 — A variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 5×11N
-_S10W2A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W2A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -992,7 +998,7 @@ _S10W2A_IDEAL: int = 132
 # S10W2 — B variant: A@0,10 + F@2,8 back; A@2,8 + F@4,6 mid-1; 5×11N
 # back: A@0→N@1(3); A@10→N@9(3); N@3,4,5,6(4×2=8); F@2,8 fall. back=14.
 # mid-1: A@2→N@1,N@3(3); A@8→N@7,N@9(3); F@4,6 fall. mid-1=6. 5×22=110. total=130
-_S10W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W2B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_A, _N, _F, _N, _N, _N, _N, _N, _F, _N, _A),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _N, _N, _N, _N, _N, _N, _N, _N, _N),
@@ -1004,7 +1010,7 @@ _S10W2B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
 _S10W2B_IDEAL: int = 130
 
 # S10W3 — A variant: F@0,4,6,10+A@2,8 back; A@2,8+F@4,6 mid-1; F@2,8 mid-2; F@3,6 mid-3; 3×11N
-_S10W3A_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W3A_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),
@@ -1017,7 +1023,7 @@ _S10W3A_IDEAL: int = 114
 
 # S10W3 — B variant: same layout as A (identical structure, same ideal)
 # back: 2×3=6. mid-1: 2×3=6. mid-2: 9×2=18. mid-3: 9×2=18. 3×22=66. total=114
-_S10W3B_ROWS: tuple[tuple[CubeType | None, ...], ...] = (
+_S10W3B_ROWS: tuple[tuple[CubeType, ...], ...] = (
     (_F, _N, _A, _N, _F, _N, _F, _N, _A, _N, _F),
     (_N, _N, _A, _N, _F, _N, _F, _N, _A, _N, _N),
     (_N, _N, _F, _N, _N, _N, _N, _N, _F, _N, _N),

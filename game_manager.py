@@ -1218,9 +1218,10 @@ class GameManager:
             self._perfect_display = False
             if self._wave_index + 1 < len(self._waves):
                 # Lives remain: consume the back-most pending wave as a retry
-                # token, then respawn the current slot at the same z position.
+                # token, then re-pack all remaining waves from the back wall
+                # so there is never empty z-space behind the replayed wave.
                 self._consume_last_pending_life()
-                self._respawn_current_slot()
+                self._repack_pending_waves(player)
             else:
                 # All pending waves exhausted; full reload after WAVE_RISING.
                 self._post_rising_reload = True
@@ -1264,29 +1265,19 @@ class GameManager:
         self._phase = GamePhase.WAVE_RISING
 
     def _consume_last_pending_life(self) -> None:
-        """Remove the back-most pending wave, consuming one crush-retry life.
+        """Shrink _waves/_wave_z_starts/_wave_mirrors by removing the last entry.
 
-        Called from the crush path of _on_wave_cleared when pending waves
-        remain beyond the current active slot.  Takes the LAST entry in
-        _waves (the pre-placed wave furthest from the player) and discards
-        its pending cubes via remove_pending_in_range, then shrinks _waves
-        and _wave_z_starts by one entry.  The visible row count on screen
-        decreases by one wave each call, giving the player a clear signal
-        that a life has been spent.
+        Called from the crush path of _on_wave_cleared. Removes the LAST wave
+        from the data structures — the wave furthest from the player (highest z).
+        Does NOT directly clear cubes from the wave manager; the follow-on
+        _repack_pending_waves call handles cube clearing and re-placement.
+        Triggers a light screen shake to signal the life was spent.
         """
         last_idx = len(self._waves) - 1
         assert last_idx > self._wave_index, (
             f"last_idx {last_idx} <= wave_index {self._wave_index} — "
             "cannot consume the current active slot as a life"
         )
-        assert last_idx < len(self._wave_z_starts), (
-            f"last_idx {last_idx} out of range for _wave_z_starts"
-        )
-        z_back = self._wave_z_starts[last_idx]
-        row_count = self._waves[last_idx].row_count
-        z_front = z_back - row_count + 1
-        removed = self._wave.remove_pending_in_range(z_front, z_back)
-        assert removed >= 0, "remove_pending_in_range returned a negative count"
         waves_list = list(self._waves)
         _ = waves_list.pop(last_idx)   # consumed; return value unused
         self._waves = tuple(waves_list)
@@ -1298,44 +1289,45 @@ class GameManager:
         assert len(self._waves) == len(self._wave_mirrors), (
             "waves / mirrors length mismatch after consuming a pending life"
         )
-        # Small shake: signals to the player that a life was just consumed.
+        # Light shake: signals to the player that a life was just consumed.
         # Weaker than the crush shake (amplitude 10, duration 0.6) so it
         # reads as a "cost paid" rather than a new crush event.
         self._effects.trigger_shake(amplitude=5.0, duration=0.25)
 
-    def _respawn_current_slot(self) -> None:
-        """Replay the current wave slot using the EXACT same WaveData and mirror.
+    def _repack_pending_waves(self, player: Player) -> None:
+        """Re-pack all remaining waves from the back wall, preserving mirrors.
 
         Called after _consume_last_pending_life in the crush-retry path.
-        Uses self._waves[_wave_index] (the same A/B variant that crushed the
-        player — no re-roll) and self._wave_mirrors[_wave_index] (the same
-        mirror orientation — no re-roll).  Together these guarantee an
-        identical cube layout: same pattern, same positions, same z depth.
-        No new randomness is introduced so the player faces exactly the wave
-        that defeated them.
+        Clears all cubes (safe: active cubes are gone after a crush), then
+        recomputes z_starts so waves pack against z=GRID_DEPTH-1 with no
+        empty z-space behind any wave.  Uses existing mirror flags (no re-
+        roll) so the replayed wave keeps the same cube layout that crushed
+        the player.  Player z is clamped below the new wave front.
         """
-        assert len(self._waves) > 0, "_respawn_current_slot called with no waves"
-        assert 0 <= self._wave_index < len(self._waves), (
-            f"wave_index {self._wave_index} out of range [0, {len(self._waves)})"
+        assert len(self._waves) > 0, "_repack_pending_waves called with no waves"
+        assert len(self._waves) == len(self._wave_mirrors), (
+            "waves / mirrors mismatch before repack"
         )
-        assert self._wave_index < len(self._wave_z_starts), (
-            "_respawn_current_slot: _wave_z_starts not yet computed"
+        assert self._wave.active_cube_count == 0, (
+            "active cubes remain during crush-retry repack — wave not fully cleared"
         )
-        assert self._wave_index < len(self._wave_mirrors), (
-            "_respawn_current_slot: _wave_mirrors not yet computed"
+        self._wave.reset_for_new_wave()   # clear all pending cubes
+        self._wave_z_starts = self._compute_wave_z_starts()
+        assert len(self._wave_z_starts) == len(self._waves), (
+            "z_starts length mismatch after repack compute"
         )
-        wave_data = self._waves[self._wave_index]   # same variant, no re-roll
-        mirror = self._wave_mirrors[self._wave_index]  # same orientation, no re-roll
-        z_start = self._wave_z_starts[self._wave_index]  # same z depth, unchanged
-        positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
-        assert len(positions) > 0, (
-            "_respawn_current_slot: wave_data produced no spawn positions"
-        )
-        for gx, gz, cube_type in positions:
-            self._wave.spawn_cube(gx, gz, cube_type, pending=True)
-        assert self._wave.cube_count > 0, (
-            "_respawn_current_slot placed no cubes — wave data may be empty"
-        )
+        for wave_idx, wave_data in enumerate(self._waves):
+            z_start = self._wave_z_starts[wave_idx]
+            mirror = self._wave_mirrors[wave_idx]
+            positions = wave_data.spawn_positions(mirror=mirror, z_start=z_start)
+            assert len(positions) > 0, (
+                f"wave {wave_idx} produced no positions during repack"
+            )
+            for gx, gz, cube_type in positions:
+                self._wave.spawn_cube(gx, gz, cube_type, pending=True)
+        assert self._wave.cube_count > 0, "_repack_pending_waves placed no cubes"
+        # Keep the player out of the new wave's z range.
+        player.clamp_z_before_wave(self.wave_front_z)
 
     def _reload_remaining_waves(self, player: Player) -> None:
         """Spawn the remaining needed waves from pool and enter STAGE_INTRO.
