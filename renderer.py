@@ -28,7 +28,8 @@ Mat4 = list[float]               # Row-major 4x4 as a flat list of 16 floats
 ScreenPoint = tuple[float, float]
 
 # A face handed to the renderer: 4 world-space corners + colors/edge style.
-FaceDescriptor = tuple[tuple[Vec3, Vec3, Vec3, Vec3], ColorRGB, ColorRGB, int]
+# edge_color may be None to suppress outline drawing (used for table wall faces).
+FaceDescriptor = tuple[tuple[Vec3, Vec3, Vec3, Vec3], ColorRGB, ColorRGB | None, int]
 
 # A triangular face: 3 world-space corners + colors/edge style.
 # Used for cone marker geometry where quads are unnecessarily complex.

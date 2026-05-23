@@ -102,9 +102,9 @@ class WaveData:
         Every cell in every row must be a CubeType (no None allowed); this is
         enforced by __init__ so no cell is ever skipped here.
         """
-        if z_start is not None and not (0 <= z_start < GRID_DEPTH):
+        if z_start is not None and z_start < 0:
             raise ValueError(
-                f"z_start {z_start} outside [0, {GRID_DEPTH})"
+                f"z_start {z_start} must be non-negative"
             )
         positions: list[tuple[int, int, CubeType]] = []
         row_width = len(self._rows[0])
@@ -1152,20 +1152,42 @@ STAGE_POOL_SLOTS: tuple[tuple[str, str, str, str], ...] = (
 
 
 def select_all_waves(rng: _random.Random) -> tuple[tuple[WaveData, ...], ...]:
-    """Select one WaveData per slot for every stage.
+    """Select one WaveData per slot for every stage, with shuffled slot order.
 
     Returns a tuple of 10 stage-wave tuples. Each inner tuple has 4 WaveData
-    objects, one per wave slot, randomly selected from the slot's pool.
-    Called once at game start; the selection is fixed for the entire run.
+    objects. For each stage:
+      * Slot 0 (the opener wave, e.g. S1W0) is always placed first — it is the
+        fixed anchor wave that establishes each stage's cube vocabulary.
+        (W0 is not always the easiest wave in later stages; it is simply the
+        consistent first encounter for that stage's patterns.)
+      * Slots 1-3 (e.g. S1W1, S1W2, S1W3) are shuffled randomly so the order
+        of mid and late waves varies between runs.
+      * Within each slot, the A/B variant is picked randomly from the pool.
+
+    The resulting ordering is fixed for the entire run; calling start_game once
+    per run (at startup and on each restart) uses this selection throughout.
     The caller passes an explicit rng (random.Random) so tests can seed it.
+
+    Arrangement variety: 3! = 6 orderings × 2^4 = 16 A/B combos = 96 possible
+    sequences per stage.  Combined across all 10 stages: 96^10 ≈ 6.6 × 10^19.
     """
     result: list[tuple[WaveData, ...]] = []
     assert len(STAGE_POOL_SLOTS) == 10, "STAGE_POOL_SLOTS must have 10 entries"
     for stage_slots in STAGE_POOL_SLOTS:
         stage_waves: list[WaveData] = []
-        for pool_key in stage_slots:
+        # Opener (slot 0) always first — it is the fixed anchor wave for each stage.
+        opener_pool = WAVE_POOLS[stage_slots[0]]
+        assert len(opener_pool) >= 1, f"opener pool {stage_slots[0]!r} is empty"
+        stage_waves.append(rng.choice(opener_pool))
+        # Remaining slots (1-3) shuffled for per-run variety.
+        remaining: list[str] = list(stage_slots[1:])
+        rng.shuffle(remaining)
+        for pool_key in remaining:
             pool = WAVE_POOLS[pool_key]
             assert len(pool) >= 1, f"pool {pool_key!r} is empty"
+            assert len(stage_waves) < len(stage_slots), (
+                "stage_waves growth exceeded slot count — loop invariant broken"
+            )
             stage_waves.append(rng.choice(pool))
         assert len(stage_waves) == 4, f"stage must have 4 waves, got {len(stage_waves)}"
         result.append(tuple(stage_waves))

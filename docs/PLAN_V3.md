@@ -1,9 +1,8 @@
 # Avalanche — v3 Plan
 
-## Status: Step 34 (opening feel) — NOT STARTED
+## Status: COMPLETE ✓
 
-v3 work lives on the `v3` branch. All changes are localhost-tested and panel-reviewed
-before merging to `master`.
+All Steps 34–45 implemented and approved. v3 branch ready to merge to `master`.
 
 ---
 
@@ -38,17 +37,20 @@ high-score table persisted in browser localStorage.
 
 Step numbering continues from v2 (Steps 1–33).
 
-| Step | ID  | Description                                  | Phase A (Dev) | Phase B (Test) | Status      |
-|------|-----|----------------------------------------------|---------------|----------------|-------------|
-| 34   | F1  | Opening feel — PLAYER_SPAWN_Z tuning         | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 35   | F2  | Wave variety — distinct openers, Stages 4–10 | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 36   | F3  | Difficulty curve audit                        | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 37   | H1  | High score table (localStorage bridge)        | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 38   | U1  | Stage Clear stats screen                      | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 39   | U2  | Row gained/lost HUD counter                   | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 40   | V1  | Platform depth (grid table walls)             | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 41   | V2  | Animated player character                     | NOT STARTED   | NOT STARTED    | NOT STARTED |
-| 42   | R1  | Wave arrangement variants + seeded leaderboard| NOT STARTED   | NOT STARTED    | NOT STARTED |
+| Step | ID  | Description                                  | Phase A (Dev)       | Phase B (Test) | Status               |
+|------|-----|----------------------------------------------|---------------------|----------------|----------------------|
+| 34   | F1  | Opening feel — PLAYER_SPAWN_Z tuning         | APPROVED 2026-05-17 | NOT STARTED    | APPROVED 2026-05-17  |
+| 35   | F2  | Wave variety — distinct openers, Stages 1–10 | APPROVED 2026-05-08 | NOT STARTED    | APPROVED 2026-05-08  |
+| 36   | F3  | Wave pool system + crush-retry gate          | APPROVED 2026-05-18 | NOT STARTED    | APPROVED 2026-05-18  |
+| 37   | H1  | High score table (localStorage bridge)       | APPROVED 2026-05-19 | NOT STARTED    | APPROVED 2026-05-19  |
+| 38   | U1  | Stage Clear stats screen                     | APPROVED 2026-05-19 | NOT STARTED    | APPROVED 2026-05-19  |
+| 39   | U2  | Row gained/lost HUD counter                  | APPROVED 2026-05-19 | NOT STARTED    | APPROVED 2026-05-19  |
+| 40   | V1  | Platform depth (grid table walls)            | APPROVED 2026-05-20 | NOT STARTED    | APPROVED 2026-05-20  |
+| 41   | V2  | Animated player character                    | APPROVED 2026-05-21 | NOT STARTED    | APPROVED 2026-05-21  |
+| 42   | R1  | Wave arrangement variants (pool + shuffle)   | APPROVED 2026-05-21 | NOT STARTED    | APPROVED 2026-05-21  |
+| 43   | V3  | Kneel on mark; arm raise on detonate/trigger | APPROVED 2026-05-21 | NOT STARTED    | APPROVED 2026-05-21  |
+| 44   | R2  | Wave back-wall + WaveManager depth caps      | APPROVED 2026-05-21 | NOT STARTED    | APPROVED 2026-05-21  |
+| 45   | V4  | Row crumble/arrival anims, wave COM camera   | APPROVED 2026-05-23 | NOT STARTED    | APPROVED 2026-05-23  |
 
 ---
 

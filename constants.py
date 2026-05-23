@@ -125,6 +125,9 @@ INTRO_HUMP_WIDTH: float = 5.0       # Half-width of cosine hump in grid rows
 # Prevents accidental skips when the end condition fires mid-keypress.
 # During the hold the prompt is shown dimmed; it brightens when input is accepted.
 END_SCREEN_HOLD: float = 2.0        # Seconds
+# Hold before the STAGE_CLEAR screen accepts input.  Longer than END_SCREEN_HOLD so
+# the player has time to read the per-stage stats panel before advancing.
+STAGE_CLEAR_HOLD: float = 4.0       # Seconds
 
 
 # --- Camera -------------------------------------------------------------------
@@ -223,6 +226,21 @@ CAMERA_EYE_Y_LERP: float = 1.5
 # eliminate the 1-unit-per-hop jerk when the player walks toward the wave.
 CAMERA_EYE_Z_LERP: float = 6.0
 
+# Camera zoom during row crumble / arrival animations.
+# 1.80 = eye pulled 80% further from the look-at point along the view ray,
+# so the crumbling row sits fully inside the viewport.
+CAM_ZOOM_OUT: float = 1.80
+CAM_ZOOM_SPEED_OUT: float = 7.0   # s⁻¹; snappy departure (half-life ~99 ms)
+CAM_ZOOM_SPEED_IN: float = 2.2    # s⁻¹; gradual return (~1.4 s to 95%)
+
+# Row crumble and arrival animation timings.
+CRUMBLE_PRE_ZOOM_DELAY: float = 0.50   # Camera settles before tiles start fading
+ROW_CRUMBLE_DURATION: float = 0.55     # Per-tile fade duration
+ROW_CRUMBLE_STAGGER: float = 1.00      # Delay between successive rows
+MAX_CRUMBLE_TILES: int = 176           # Rule-3 cap: 16 rows × max width 11
+ROW_ARRIVAL_DURATION: float = 0.90     # Arrival highlight fade duration
+MAX_ARRIVAL_TILES: int = 11            # Rule-3 cap: one row at a time, max width 11
+
 
 # --- Face shading -------------------------------------------------------------
 # Per-face brightness multipliers applied in cube_data.get_cube_faces().
@@ -311,6 +329,7 @@ class GamePhase(Enum):
     STAGE_CLEAR = "stage_clear"  # Between-stage screen; all gameplay frozen
     MENU = "menu"           # Esc pause menu open; all gameplay frozen
     HIGH_SCORE = "high_score"   # Top-10 table shown after GAME_OVER / VICTORY
+    NAME_ENTRY = "name_entry"   # Player is typing their name for a new top-10 entry
 
 
 # --- Registry TypedDicts ------------------------------------------------------
@@ -396,6 +415,13 @@ TILE_CHECKER_DELTA: int = 8
 # (purple), and the player cube (blue), while matching the PERFECT! warning
 # vocabulary already present in the HUD/overlay palette (255, 220, 50).
 DANGER_TOP_COLOR: ColorRGB = (255, 220, 0)
+
+# Step 40 (V1): Platform table walls.
+# The visible edges of the grid (left side, right side, front face) are extended
+# downward by TABLE_DEPTH world units, creating an imposing table effect.
+# TABLE_SIDE_COLOR is darker than the tile top (90, 90, 110) to suggest depth.
+TABLE_DEPTH: float = 8.0
+TABLE_SIDE_COLOR: ColorRGB = (40, 40, 55)
 
 
 # --- Player -------------------------------------------------------------------

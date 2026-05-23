@@ -20,7 +20,7 @@ progress) re-render only on change. Under normal play this saves 6–7 of 8
 
 import pygame
 
-from constants import PENALTY_THRESHOLD, SCREEN_HEIGHT, ColorRGB
+from constants import PENALTY_THRESHOLD, SCREEN_HEIGHT, SCREEN_WIDTH, ColorRGB
 from game_manager import GameManager
 from grid_manager import GridManager
 from player import Player
@@ -39,9 +39,12 @@ HUD_FIRST_LINE_Y: int = 10
 # front-row tiles (canvas height derived from SCREEN_HEIGHT at runtime).
 HUD_HINT_MARGIN_BOTTOM: int = 14
 
-# Surface cache bound: 5 stat labels + 1 hint label.
+# Right margin for the row counter (mirrors the delta-label right margin).
+HUD_ROW_COUNTER_RIGHT_MARGIN: int = 20
+
+# Surface cache bound: 5 stat labels + 1 hint label + 1 row counter.
 # If a new HUD line is added, bump this constant accordingly.
-MAX_HUD_CACHE_ENTRIES: int = 6
+MAX_HUD_CACHE_ENTRIES: int = 7
 
 
 class Hud:
@@ -76,9 +79,11 @@ class Hud:
         screen: pygame.Surface,
         font: pygame.font.Font,
     ) -> None:
-        """Render the full HUD (top-left stat block + bottom-left hint line)."""
+        """Render the full HUD (top-left stat block + bottom-left hint line
+        + top-right row counter)."""
         self._draw_stat_block(screen, font)
         self._draw_hint_line(screen, font)
+        self._draw_row_counter(screen, font)
 
     # --- Private helpers -----------------------------------------------------
 
@@ -148,6 +153,24 @@ class Hud:
             return "---"
         mx, mz = mark
         return f"({mx}, {mz})"
+
+    def _draw_row_counter(
+        self,
+        screen: pygame.Surface,
+        font: pygame.font.Font,
+    ) -> None:
+        """Top-right row counter: permanent surviving-row readout.
+
+        Anchored at the same right margin as the floating +1 / -1 delta
+        labels so the animated labels are clearly tied to this value.  The
+        counter updates every frame so the player can watch it decrement on
+        penalty and increment on a Perfect clear.
+        """
+        rows = self._game.surviving_rows
+        text = f"Rows: {rows}"
+        surface = self._render("rows", text, font, HUD_COLOR)
+        right_x = SCREEN_WIDTH - HUD_ROW_COUNTER_RIGHT_MARGIN
+        _ = screen.blit(surface, (right_x - surface.get_width(), HUD_FIRST_LINE_Y))
 
     def _draw_hint_line(
         self,
