@@ -31,7 +31,7 @@ GRID_WIDTH: int = 11     # Maximum X-axis tile count across all stages.
 # All stages have exactly 4 waves; rows/wave follows STAGE_ROWS_PER_WAVE.
 # Waves pack backward from z=GRID_DEPTH-1; wave 0 (first) is closest to player.
 # Stage 1 (4w × 2r): wave-0 front z=52.  Stage 10 (4w × 7r): wave-0 front z=32.
-# Player spawn is fixed at PLAYER_SPAWN_Z=21 and persists across stage transitions.
+# Player spawns 6 tiles below wave-0 front (PLAYER_INITIAL_WAVE_GAP) at game start.
 GRID_DEPTH: int = 60     # Z-axis tile count (rows); Step 32: 40 → 60.
 
 # Per-stage active grid width (0-based stage index). Width increases at stage 5
@@ -125,6 +125,9 @@ INTRO_HUMP_WIDTH: float = 5.0       # Half-width of cosine hump in grid rows
 # Prevents accidental skips when the end condition fires mid-keypress.
 # During the hold the prompt is shown dimmed; it brightens when input is accepted.
 END_SCREEN_HOLD: float = 2.0        # Seconds
+# Hold before the STAGE_CLEAR screen accepts input.  Longer than END_SCREEN_HOLD so
+# the player has time to read the per-stage stats panel before advancing.
+STAGE_CLEAR_HOLD: float = 4.0       # Seconds
 
 
 # --- Camera -------------------------------------------------------------------
@@ -168,21 +171,20 @@ FAR_PLANE: float = 100.0
 #
 #   Orientation safety: eye.z = +2 would let the camera look BACKWARD
 #   once the smooth target.z fell below 2.0.  CAMERA_FOLLOW_TARGET_Z_MIN
-#   clamps the smooth target to ≥ 2.5, guaranteeing target.z > eye.z
-#   always.  With k=2 the smooth target only reaches 2.5 after ~1.6 s
-#   of the player sitting at z=0 (effectively unreachable — they're dead
-#   long before then).
+#   (deprecated Step 33) was the old clamp; main.py now uses the dynamic
+#   floor max(eye_z + 0.5, cam_xz[1]) which achieves the same guarantee.
 #
 #   eye.y = 7.8 (20% shallower elevation than the previous 27°):
-#     At player spawn (3.5, 0, 21.5):
+#     At game start player sits at z≈46 (wave_front_z − PLAYER_INITIAL_WAVE_GAP):
+#       eye.z = 46.5 − 19.5 = 27.0  (CAMERA_EYE_Z_OFFSET keeps this gap constant)
 #       horiz dist ≈ sqrt(0.5² + 19.5²) ≈ 19.5 u
 #       elevation  = atan2(7.8, 19.5) ≈ 21.8°  (80% of previous 27.1°)
 #       total dist ≈ 21.0 u
 #
-#   Horizontal swivel range at spawn (tile-centred, 20% wider than before):
+#   Horizontal swivel range (tile-centred, 20% wider than the original):
 #     left  x=0 → dx=−2.5, dz=19.5 → atan2(2.5,19.5) ≈ 7.3°
 #     right x=6 → dx=+3.5, dz=19.5 → atan2(3.5,19.5) ≈ 10.2°
-#     Total ≈ 17.5° vs previous 14.6° (+20%).
+#     Total ≈ 17.5° vs original 14.6° (+20%).
 #
 # CAMERA_FOLLOW_SMOOTH: exponential-decay coefficient (s⁻¹).
 #   alpha = 1 − exp(−k·dt).  k=2 → ~21% per MOVE_COOLDOWN (0.12 s);
@@ -210,8 +212,8 @@ CAMERA_FOLLOW_TARGET_Z_MIN: float = 2.5  # DEPRECATED Step 33 — dynamic floor
 # reach 7 rows/wave (Stage 10) — a taller wall that would be clipped at 0.10.
 CAMERA_WAVE_EYE_Y_SCALE: float = 0.15
 # Step 33: Camera eye Z tracks the player position, maintaining a fixed offset.
-# CAMERA_EYE_Z_OFFSET = PLAYER_SPAWN_Z + 0.5 − CAMERA_FOLLOW_EYE[2] = 19.5
 # eye_z = player.world_z − CAMERA_EYE_Z_OFFSET
+# At game start (player at z≈46): eye_z = 46.5 − 19.5 = 27.0.
 CAMERA_EYE_Z_OFFSET: float = 19.5
 # Exponential-decay rate for smoothing eye-Y between waves (per second).
 # At 1.5 rad/s: 63% of the step is covered in ~0.67 s (comfortably within
@@ -223,6 +225,21 @@ CAMERA_EYE_Y_LERP: float = 1.5
 # responsive to player movement (MOVE_COOLDOWN=0.12 s), slow enough to
 # eliminate the 1-unit-per-hop jerk when the player walks toward the wave.
 CAMERA_EYE_Z_LERP: float = 6.0
+
+# Camera zoom during row crumble / arrival animations.
+# 1.80 = eye pulled 80% further from the look-at point along the view ray,
+# so the crumbling row sits fully inside the viewport.
+CAM_ZOOM_OUT: float = 1.80
+CAM_ZOOM_SPEED_OUT: float = 7.0   # s⁻¹; snappy departure (half-life ~99 ms)
+CAM_ZOOM_SPEED_IN: float = 2.2    # s⁻¹; gradual return (~1.4 s to 95%)
+
+# Row crumble and arrival animation timings.
+CRUMBLE_PRE_ZOOM_DELAY: float = 0.50   # Camera settles before tiles start fading
+ROW_CRUMBLE_DURATION: float = 0.55     # Per-tile fade duration
+ROW_CRUMBLE_STAGGER: float = 1.00      # Delay between successive rows
+MAX_CRUMBLE_TILES: int = 176           # Rule-3 cap: 16 rows × max width 11
+ROW_ARRIVAL_DURATION: float = 0.90     # Arrival highlight fade duration
+MAX_ARRIVAL_TILES: int = 11            # Rule-3 cap: one row at a time, max width 11
 
 
 # --- Face shading -------------------------------------------------------------
@@ -311,6 +328,8 @@ class GamePhase(Enum):
     VICTORY = "victory"
     STAGE_CLEAR = "stage_clear"  # Between-stage screen; all gameplay frozen
     MENU = "menu"           # Esc pause menu open; all gameplay frozen
+    HIGH_SCORE = "high_score"   # Top-10 table shown after GAME_OVER / VICTORY
+    NAME_ENTRY = "name_entry"   # Player is typing their name for a new top-10 entry
 
 
 # --- Registry TypedDicts ------------------------------------------------------
@@ -397,6 +416,13 @@ TILE_CHECKER_DELTA: int = 8
 # vocabulary already present in the HUD/overlay palette (255, 220, 50).
 DANGER_TOP_COLOR: ColorRGB = (255, 220, 0)
 
+# Step 40 (V1): Platform table walls.
+# The visible edges of the grid (left side, right side, front face) are extended
+# downward by TABLE_DEPTH world units, creating an imposing table effect.
+# TABLE_SIDE_COLOR is darker than the tile top (90, 90, 110) to suggest depth.
+TABLE_DEPTH: float = 8.0
+TABLE_SIDE_COLOR: ColorRGB = (40, 40, 55)
+
 
 # --- Player -------------------------------------------------------------------
 
@@ -407,8 +433,15 @@ PLAYER_SPAWN_X: int = 3  # Centre of the initial 7-wide Stage-1 grid (GRID_WIDTH
                          # is wrong for Stage 1).  Player.reset() uses grid.width // 2
                          # at runtime so the player is always centred on stage transitions.
 # Step 33: waves are back-packed from z=GRID_DEPTH-1; PLAYER_SPAWN_Z is the
-# starting row for the player at game start. The camera eye tracks player Z.
+# fallback spawn row used by player.reset() when no wave position is available.
+# At game start and on restart, game_manager overrides this by calling
+# player.position_near_wave(wave_front_z, PLAYER_INITIAL_WAVE_GAP) so the player
+# lands exactly PLAYER_INITIAL_WAVE_GAP tiles below wave-0 front (Step 34).
 PLAYER_SPAWN_Z: int = 21
+# Tiles of clear space between the player and wave-0 front at game start and
+# restart. Stage 1: wave_front_z=52 → player_z=46 (52−6). Persists wave to wave
+# thereafter; only fires again on a full restart.
+PLAYER_INITIAL_WAVE_GAP: int = 6
 PLAYER_COLORS: dict[str, ColorRGB] = {
     "top": (130, 200, 255),     # Brighter luminance so the player reads clearly
     "front": (80, 160, 230),    # against the bluish-gray tile top (90, 90, 110).

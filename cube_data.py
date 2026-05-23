@@ -17,6 +17,8 @@ from constants import (
     PLAYER_CRUSH_EDGE_COLOR,
     PLAYER_EDGE_COLOR,
     PLAYER_HALF_EXTENT,
+    TABLE_DEPTH,
+    TABLE_SIDE_COLOR,
     TILE_CHECKER_DELTA,
     TILE_COLORS,
     TUMBLE_BALANCE_END,
@@ -27,6 +29,7 @@ from constants import (
     TUMBLE_SIN_LUT,
     ColorRGB,
     CubeType,
+    Direction,
     TileState,
 )
 from renderer import FaceDescriptor, TriFaceDescriptor, Vec3
@@ -359,3 +362,361 @@ def get_tile_face(
     else:
         fill = colors["top"]
     return (verts, fill, colors["edge"], 1)
+
+
+# --- Table edge wall geometry (Step 40) ----------------------------------------
+# Three light-multipliers for the three visible wall directions.
+# Front wall faces the camera (-Z direction); left faces +X; right faces -X.
+# Using FACE_MULTS convention: front and +X are "lit" (0.75), -X is "shadow" (0.55).
+_WALL_MULT_FRONT: float = 0.75    # front wall — obliquely lit, faces camera
+_WALL_MULT_LEFT: float = 0.65     # left wall (+X facing) — partially lit
+_WALL_MULT_RIGHT: float = 0.50    # right wall (-X facing) — shadow side
+
+
+def _shade(color: ColorRGB, mult: float) -> ColorRGB:
+    return (int(color[0] * mult), int(color[1] * mult), int(color[2] * mult))
+
+
+def get_table_edge_faces(
+    grid_width: int,
+    grid_depth: int,
+    front_edge_z: int,
+    table_depth: float = TABLE_DEPTH,
+) -> list[FaceDescriptor]:
+    """Return wall quads hanging below the visible grid edges.
+
+    Generates one quad per tile segment for front, left, and right walls so
+    painter's-algorithm depth sorting stays accurate even when cubes overlap
+    the wall z-range.  Face count: grid_width (front) + 2*(grid_depth −
+    front_edge_z) (left + right) = O(grid_width + grid_depth), always bounded.
+
+    Vertex winding matches the cube face conventions in _CUBE_FACES so the
+    same back-face culling applies: front wall uses back-face winding (visible
+    from lower z), side walls use +X/-X face winding respectively.
+    """
+    if table_depth <= 0.0:
+        raise ValueError(f"table_depth must be positive, got {table_depth}")
+    if grid_width <= 0 or grid_depth <= 0:
+        raise ValueError(
+            f"grid dimensions must be positive, got {grid_width}×{grid_depth}"
+        )
+
+    faces: list[FaceDescriptor] = []
+    d = table_depth      # depth below y=0
+    lx = -0.5            # left boundary x (left edge of column 0)
+    rx = grid_width - 0.5  # right boundary x (right edge of last column)
+
+    front_color = _shade(TABLE_SIDE_COLOR, _WALL_MULT_FRONT)
+    left_color  = _shade(TABLE_SIDE_COLOR, _WALL_MULT_LEFT)
+    right_color = _shade(TABLE_SIDE_COLOR, _WALL_MULT_RIGHT)
+
+    # Front wall: one quad per column at z = front_edge_z - 0.5.
+    # Winding: top-right → top-left → bottom-left → bottom-right.
+    # Camera looks in +Z; the front wall faces -Z (toward camera).  A 2D
+    # cross-product analysis for the follow camera confirms this order gives
+    # cross > 0 (front-facing) for all valid front_edge_z values visible to
+    # the camera.  The wall is behind the camera when front_edge_z is small
+    # (camera at z≈27 vs wall at z=-0.5); project_vertex rejects those verts
+    # via clip_w < NEAR_PLANE, so the face safely returns None until the wall
+    # enters the frustum as penalty rows are deleted.
+    fz = front_edge_z - 0.5
+    for gx in range(grid_width):
+        x0 = gx - 0.5
+        x1 = gx + 0.5
+        quad: tuple[Vec3, Vec3, Vec3, Vec3] = (
+            (x1,  0, fz),
+            (x0,  0, fz),
+            (x0, -d, fz),
+            (x1, -d, fz),
+        )
+        faces.append((quad, front_color, None, 0))
+
+    # Left and right walls: one quad per row from front_edge_z to grid_depth-1.
+    for gz in range(front_edge_z, grid_depth):
+        z0 = gz - 0.5
+        z1 = gz + 0.5
+
+        # Left wall at x=lx, facing +X.
+        # Winding: top-far → top-near → bottom-near → bottom-far.
+        left_quad: tuple[Vec3, Vec3, Vec3, Vec3] = (
+            (lx,  0, z1),
+            (lx,  0, z0),
+            (lx, -d, z0),
+            (lx, -d, z1),
+        )
+        faces.append((left_quad, left_color, None, 0))
+
+        # Right wall at x=rx, facing -X.
+        # Winding: top-near → top-far → bottom-far → bottom-near.
+        right_quad: tuple[Vec3, Vec3, Vec3, Vec3] = (
+            (rx,  0, z0),
+            (rx,  0, z1),
+            (rx, -d, z1),
+            (rx, -d, z0),
+        )
+        faces.append((right_quad, right_color, None, 0))
+
+    max_faces = grid_width + 2 * (grid_depth - front_edge_z)
+    assert len(faces) == max_faces, (
+        f"table edge face count mismatch: expected {max_faces}, got {len(faces)}"
+    )
+    return faces
+
+
+# --- Player character geometry (Step 41) ----------------------------------------
+# Low-poly humanoid: head cube + torso box + two swinging legs.
+# All y-positions are multiplied by scale_y (0.15 when crushed, 1.0 normally)
+# so the character flattens toward the floor in the avalanche crush state.
+# Vertex ordering matches _CUBE_VERTS throughout, so _build_faces works directly.
+
+_CHAR_HEAD_HW: float = 0.11    # head half-width and half-depth (square cross-section)
+_CHAR_HEAD_HH: float = 0.11    # head half-height
+_CHAR_HEAD_CY: float = 0.77    # head centre y  (spans y = 0.66 … 0.88)
+
+_CHAR_TORSO_HW: float = 0.14   # torso half-width (x)
+_CHAR_TORSO_HH: float = 0.15   # torso half-height (y)  → height = 0.30
+_CHAR_TORSO_HD: float = 0.10   # torso half-depth (z)
+_CHAR_TORSO_CY: float = 0.51   # torso centre y  (spans y = 0.36 … 0.66)
+
+_CHAR_LEG_HW: float = 0.05     # half-width per leg (x)
+_CHAR_LEG_HD: float = 0.07     # half-depth per leg (z)
+_CHAR_LEG_HIP_Y: float = 0.36  # hip-joint y = top of leg (leg spans y = 0 … 0.36)
+_CHAR_LEG_X_OFF: float = 0.09   # each leg's x-offset from the tile centre
+_CHAR_LEG_SWING: float = 0.06   # max z-translation of foot at walk peak (depth cue only)
+_CHAR_LEG_LIFT_Y: float = 0.18  # max foot Y-rise at walk peak (main visible axis)
+_CHAR_BODY_BOB: float = 0.08    # max whole-body Y-rise at walk peak
+
+# Kneel pose (right knee on ground while marking): body drops _CHAR_KNEEL_DROP
+# world-units so the pelvis descends; right leg is compressed to _CHAR_KNEEL_HIP_Y
+# height, representing the shin with the knee touching the floor.
+_CHAR_KNEEL_DROP: float = 0.20  # pelvis + body drop (head/torso/hips all shift down)
+_CHAR_KNEEL_HIP_Y: float = 0.20  # kneeling right-leg top y (compressed shin height)
+
+# Arms: small boxes hanging from the torso shoulders.
+# Shoulder joint at y = _CHAR_ARM_SH_Y (near the top of the torso = 0.66).
+# Arms swing in Z cross-body: right arm forward with left leg, left with right.
+_CHAR_ARM_HW: float = 0.04     # arm half-width (x)
+_CHAR_ARM_HH: float = 0.09     # arm half-height (y) — arm length 0.18 wu
+_CHAR_ARM_HD: float = 0.04     # arm half-depth (z)
+_CHAR_ARM_SH_Y: float = 0.61   # shoulder joint y (near top of torso = 0.66)
+_CHAR_ARM_X_OFF: float = 0.18  # arm x-offset from tile centre (torso 0.14 + arm 0.04)
+_CHAR_ARM_SWING: float = 0.06  # max arm Z-swing (matches leg Z-swing amplitude)
+
+# Facing-direction face highlight: a distinctly lighter blue applied to the
+# face-direction face of the head so the front reads clearly at small character size.
+_CHAR_FACE_COLOR: ColorRGB = (210, 235, 255)
+
+# Map from player facing Direction to the _CUBE_FACES key for the face highlight.
+# "front"=+Z face, "back"=−Z face, "side"=±X (both X faces share the one key).
+_FACING_FACE_KEY: dict[Direction, str] = {
+    Direction.FORWARD:  "front",   # faces +Z (toward wave, away from camera)
+    Direction.BACKWARD: "back",    # faces −Z (toward camera)
+    Direction.LEFT:     "side",    # faces +X
+    Direction.RIGHT:    "side",    # faces −X
+}
+
+# Per-part colour multipliers (applied to PLAYER_COLORS face values).
+# Head 100%; torso 85%; legs 70%; arms 75%.
+_CHAR_PART_MULTS: tuple[float, float, float, float] = (1.0, 0.85, 0.70, 0.75)
+
+_CHAR_TOTAL_FACES: int = 36    # 6 parts × 6 cube-faces each
+
+
+def _tinted(colors: dict[str, ColorRGB], m: float) -> dict[str, ColorRGB]:
+    """Return a copy of a face-direction color dict with each channel scaled by m."""
+    assert 0.0 < m <= 1.0, f"tint multiplier {m} not in (0, 1]"
+    return {k: (int(v[0] * m), int(v[1] * m), int(v[2] * m)) for k, v in colors.items()}
+
+
+def _head_face_colors(
+    colors: dict[str, ColorRGB], mult: float, facing: Direction, crushed: bool,
+) -> dict[str, ColorRGB]:
+    """Return head color dict with the facing-direction face highlighted.
+
+    The face-side face gets `_CHAR_FACE_COLOR` (distinctly lighter than the
+    back) so the character's front is readable at small screen size.  Suppressed
+    when crushed — the character is flat and the highlight serves no purpose.
+    """
+    tinted = _tinted(colors, mult)
+    if crushed:
+        return tinted
+    face_key = _FACING_FACE_KEY[facing]
+    assert face_key in tinted, f"face key {face_key!r} missing from color dict"
+    return {**tinted, face_key: _CHAR_FACE_COLOR}
+
+
+def _append_arm_faces(
+    faces: list[FaceDescriptor],
+    cx: float, cz: float,
+    l_arm_cy: float, r_arm_cy: float,
+    scale_y: float,
+    left_arm_z: float, right_arm_z: float,
+    colors: dict[str, ColorRGB], mult: float, edge: ColorRGB,
+) -> None:
+    """Build and append left + right arm faces (12 faces total).
+
+    `l_arm_cy` / `r_arm_cy`: centre-y of each arm box.  Normally equal (both
+    hanging from the shoulder), but `r_arm_cy` is raised above the shoulder
+    when the player is detonating.
+    """
+    pre = len(faces)
+    assert pre <= _CHAR_TOTAL_FACES - 12, f"no room for 12 arm faces: {pre}"
+    lv = _char_box_verts(
+        cx - _CHAR_ARM_X_OFF, l_arm_cy, cz + left_arm_z,
+        _CHAR_ARM_HW, _CHAR_ARM_HH, _CHAR_ARM_HD, scale_y,
+    )
+    _append_part_faces(faces, lv, _tinted(colors, mult), edge)
+    rv = _char_box_verts(
+        cx + _CHAR_ARM_X_OFF, r_arm_cy, cz + right_arm_z,
+        _CHAR_ARM_HW, _CHAR_ARM_HH, _CHAR_ARM_HD, scale_y,
+    )
+    _append_part_faces(faces, rv, _tinted(colors, mult), edge)
+    assert len(faces) == pre + 12, f"arm faces added {len(faces) - pre}, expected 12"
+
+
+def _char_box_verts(
+    cx: float, cy: float, cz: float,
+    hw: float, hh: float, hd: float,
+    scale_y: float,
+) -> tuple[Vec3, ...]:
+    """Eight vertices for a y-scaled axis-aligned box, in _CUBE_VERTS order.
+
+    All y-coordinates are multiplied by scale_y so the crush squash (scale_y=0.15)
+    collapses every body part toward the floor uniformly.
+    """
+    if scale_y <= 0.0:
+        raise ValueError(f"scale_y must be positive, got {scale_y}")
+    sy = cy * scale_y
+    sh = hh * scale_y
+    return (
+        (cx - hw, sy - sh, cz - hd),  # 0 bottom-left-back
+        (cx + hw, sy - sh, cz - hd),  # 1 bottom-right-back
+        (cx + hw, sy + sh, cz - hd),  # 2 top-right-back
+        (cx - hw, sy + sh, cz - hd),  # 3 top-left-back
+        (cx - hw, sy - sh, cz + hd),  # 4 bottom-left-front
+        (cx + hw, sy - sh, cz + hd),  # 5 bottom-right-front
+        (cx + hw, sy + sh, cz + hd),  # 6 top-right-front
+        (cx - hw, sy + sh, cz + hd),  # 7 top-left-front
+    )
+
+
+def _char_leg_verts(
+    leg_x: float, cz: float, swing_z: float,
+    lift_y: float, hip_y: float, scale_y: float,
+) -> tuple[Vec3, ...]:
+    """Eight vertices for one leg with foot-lift and hip-anchor walking motion.
+
+    `swing_z`: z-translation of the foot (minor depth cue, ~invisible from camera).
+    `lift_y`:  world-space y-height of the foot above the floor — this is the
+               primary visible animation axis (~42 px/world-unit at game distance).
+    `hip_y`:   unscaled hip-joint y; multiplied by scale_y so the crush-flat
+               effect collapses both ends of the leg toward the floor.
+    """
+    if scale_y <= 0.0:
+        raise ValueError(f"scale_y must be positive, got {scale_y}")
+    hy = hip_y * scale_y
+    hw = _CHAR_LEG_HW
+    hd = _CHAR_LEG_HD
+    assert 0.0 <= lift_y < hy, (
+        f"lift_y {lift_y:.4f} must be in [0, hip_y×scale_y={hy:.4f})"
+    )
+    return (
+        (leg_x - hw, lift_y, cz - hd + swing_z),  # 0 bottom-left-back
+        (leg_x + hw, lift_y, cz - hd + swing_z),  # 1 bottom-right-back
+        (leg_x + hw, hy,     cz - hd),             # 2 top-right-back (hip)
+        (leg_x - hw, hy,     cz - hd),             # 3 top-left-back  (hip)
+        (leg_x - hw, lift_y, cz + hd + swing_z),  # 4 bottom-left-front
+        (leg_x + hw, lift_y, cz + hd + swing_z),  # 5 bottom-right-front
+        (leg_x + hw, hy,     cz + hd),             # 6 top-right-front (hip)
+        (leg_x - hw, hy,     cz + hd),             # 7 top-left-front  (hip)
+    )
+
+
+def _append_part_faces(
+    faces: list[FaceDescriptor],
+    part_verts: tuple[Vec3, ...],
+    colors: dict[str, ColorRGB],
+    edge: ColorRGB,
+) -> None:
+    """Append the 6 rendered faces of one character body part into `faces`."""
+    for fd in _build_faces(part_verts, colors, edge, 1):
+        assert len(faces) < _CHAR_TOTAL_FACES, "character face overflow"
+        faces.append(fd)
+
+
+def get_player_character_faces(
+    grid_x: float,
+    grid_z: float,
+    walk_progress: float,
+    step_parity: bool,
+    is_crushed: bool,
+    facing: Direction,
+    is_marking: bool = False,
+    is_detonating: bool = False,
+    is_triggering: bool = False,
+) -> list[FaceDescriptor]:
+    """Return face descriptors for the animated low-poly player character.
+
+    6 parts × 6 faces = 36 FaceDescriptors total (head, torso, 2 legs, 2 arms).
+    `facing` drives which face of the head carries the lighter face highlight.
+    `walk_progress` [0,1]: 1 just stepped, decays to 0 idle.  Y-axis foot-lift
+    and body-bob are the primary visible animation; Z-swing is a minor depth cue.
+    `step_parity` alternates the leading leg; arms swing cross-body.
+    `is_crushed` flattens to scale_y=0.15 and switches to dark red.
+    `is_marking` kneels on the right knee (body drops, right leg compressed).
+    `is_detonating` raises the right arm above the shoulder (Z key gesture).
+    `is_triggering` raises the left arm (X key capture gesture).
+    """
+    if not (0.0 <= walk_progress <= 1.0):
+        raise ValueError(f"walk_progress {walk_progress!r} not in [0, 1]")
+    scale_y = 0.15 if is_crushed else 1.0
+    colors = PLAYER_CRUSH_COLORS if is_crushed else PLAYER_COLORS
+    edge = PLAYER_CRUSH_EDGE_COLOR if is_crushed else PLAYER_EDGE_COLOR
+    cx = float(grid_x)
+    cz = float(grid_z)
+    # Half-sine clamped to [0,1] guards the float sign-flip at sin(π).
+    t = max(0.0, math.sin(math.pi * walk_progress))
+    raw_swing = _CHAR_LEG_SWING * t
+    raw_lift = 0.0 if is_crushed else _CHAR_LEG_LIFT_Y * t
+    y_bob = 0.0 if is_crushed else _CHAR_BODY_BOB * t
+    # Kneeling pose: right knee on ground while marking (suppresses walk swing).
+    if is_marking and not is_crushed:
+        left_swing = right_swing = left_lift = right_lift = left_arm_z = right_arm_z = 0.0
+        head_cy = _CHAR_HEAD_CY - _CHAR_KNEEL_DROP
+        torso_cy = _CHAR_TORSO_CY - _CHAR_KNEEL_DROP
+        l_hip = _CHAR_LEG_HIP_Y - _CHAR_KNEEL_DROP  # standing leg (pelvis-down)
+        r_hip = _CHAR_KNEEL_HIP_Y                    # kneeling leg (compressed shin)
+    else:
+        # Walking: leading leg lifts + swings; trailing planted. Arms cross-body.
+        if not step_parity:
+            left_swing, left_lift = raw_swing, raw_lift
+            right_swing, right_lift = -raw_swing, 0.0
+            left_arm_z, right_arm_z = -raw_swing, raw_swing
+        else:
+            left_swing, left_lift = -raw_swing, 0.0
+            right_swing, right_lift = raw_swing, raw_lift
+            left_arm_z, right_arm_z = raw_swing, -raw_swing
+        head_cy = _CHAR_HEAD_CY + y_bob
+        torso_cy = _CHAR_TORSO_CY + y_bob
+        l_hip = r_hip = _CHAR_LEG_HIP_Y + y_bob
+    # Arms: trigger raises left (X key), detonate raises right (Z key); crushed suppresses all.
+    base_arm_cy = _CHAR_ARM_SH_Y + y_bob - _CHAR_ARM_HH
+    up_arm_cy = _CHAR_ARM_SH_Y + y_bob + _CHAR_ARM_HH
+    l_arm_cy = up_arm_cy if is_triggering and not is_crushed else base_arm_cy
+    r_arm_cy = up_arm_cy if is_detonating and not is_crushed else base_arm_cy
+    faces: list[FaceDescriptor] = []
+    head_mult, torso_mult, leg_mult, arm_mult = _CHAR_PART_MULTS
+    hv = _char_box_verts(cx, head_cy, cz, _CHAR_HEAD_HW, _CHAR_HEAD_HH, _CHAR_HEAD_HW, scale_y)
+    _append_part_faces(faces, hv, _head_face_colors(colors, head_mult, facing, is_crushed), edge)
+    tv = _char_box_verts(cx, torso_cy, cz, _CHAR_TORSO_HW, _CHAR_TORSO_HH, _CHAR_TORSO_HD, scale_y)
+    _append_part_faces(faces, tv, _tinted(colors, torso_mult), edge)
+    lv = _char_leg_verts(cx - _CHAR_LEG_X_OFF, cz, left_swing, left_lift, l_hip, scale_y)
+    _append_part_faces(faces, lv, _tinted(colors, leg_mult), edge)
+    rv = _char_leg_verts(cx + _CHAR_LEG_X_OFF, cz, right_swing, right_lift, r_hip, scale_y)
+    _append_part_faces(faces, rv, _tinted(colors, leg_mult), edge)
+    _append_arm_faces(
+        faces, cx, cz, l_arm_cy, r_arm_cy, scale_y,
+        left_arm_z, right_arm_z, colors, arm_mult, edge,
+    )
+    assert len(faces) == _CHAR_TOTAL_FACES, f"got {len(faces)} character faces"
+    return faces

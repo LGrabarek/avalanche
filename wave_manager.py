@@ -24,11 +24,13 @@ from constants import (
     CubeType,
 )
 
-# One wave can spawn at most every-tile-every-column = width * depth cubes.
-# Real wave patterns are sparse (≈ one row at a time), so this is a generous
-# ceiling rather than a tight bound; tighten in Step 9 if wave patterns push
-# against it. Keeping it here (not in constants.py) so the cap travels with
-# the subsystem that enforces it.
+# Static conservative ceiling on cube count.  Used by main.py to pre-size the
+# rendered face list (MAX_ACTIVE_CUBES * 6 faces).  Wave patterns are sparse
+# (≤ 7 rows × 7 cols × 4 waves = 196 cubes), so this 420-cube ceiling is never
+# approached in practice.  NOTE: the per-instance runtime cap used in assertions
+# inside spawn_cube and _advance_tick is computed as GRID_WIDTH * self._grid_depth
+# so it correctly grows after Perfect-wave grid expansion — do NOT use this
+# constant in those assertions.
 MAX_ACTIVE_CUBES: int = GRID_WIDTH * GRID_DEPTH
 
 
@@ -77,6 +79,11 @@ class WaveManager:
         self._tick_elapsed: float = 0.0
         self._tick_interval: float = tick_interval
         self._last_dropped: list[Cube] = []
+        # Tracks the authoritative grid depth so z-range checks stay valid
+        # after Perfect-wave grid growth extends depth past GRID_DEPTH.
+        # Updated by GameManager via the grid_depth setter before any wave
+        # spawn/activate call that follows a depth change.
+        self._grid_depth: int = GRID_DEPTH
 
     # --- Read-only accessors -------------------------------------------------
 
@@ -106,6 +113,22 @@ class WaveManager:
         # or larger). The assert in update() remains satisfied.
         if self._tick_elapsed >= value:
             self._tick_elapsed = max(0.0, value - 1e-6)
+
+    @property
+    def grid_depth(self) -> int:
+        """Current authoritative grid depth.
+
+        Defaults to GRID_DEPTH.  Updated by GameManager after any Perfect-wave
+        grid growth so z-range checks in spawn_cube, activate_pending, and
+        remove_pending_in_range stay valid beyond the initial GRID_DEPTH rows.
+        """
+        return self._grid_depth
+
+    @grid_depth.setter
+    def grid_depth(self, value: int) -> None:
+        if value <= 0:
+            raise ValueError(f"grid_depth must be positive, got {value}")
+        self._grid_depth = value
 
     @property
     def last_dropped(self) -> list[Cube]:
@@ -160,10 +183,11 @@ class WaveManager:
         """
         if not (0 <= grid_x < GRID_WIDTH):
             raise ValueError(f"grid_x {grid_x} outside [0, {GRID_WIDTH})")
-        if not (0 <= grid_z < GRID_DEPTH):
-            raise ValueError(f"grid_z {grid_z} outside [0, {GRID_DEPTH})")
-        assert len(self._cubes) < MAX_ACTIVE_CUBES, (
-            f"cube count would exceed cap of {MAX_ACTIVE_CUBES}"
+        if not (0 <= grid_z < self._grid_depth):
+            raise ValueError(f"grid_z {grid_z} outside [0, {self._grid_depth})")
+        cap = GRID_WIDTH * self._grid_depth
+        assert len(self._cubes) < cap, (
+            f"cube count would exceed cap of {cap}"
         )
         self._cubes.append(Cube(grid_x, grid_z, cube_type, pending=pending))
 
@@ -186,7 +210,7 @@ class WaveManager:
         assert len(pattern) == GRID_WIDTH, (
             f"debug pattern must cover every column ({GRID_WIDTH}), got {len(pattern)}"
         )
-        back_row = GRID_DEPTH - 1
+        back_row = self._grid_depth - 1
         for x, cube_type in enumerate(pattern):
             self.spawn_cube(x, back_row, cube_type)
 
@@ -299,8 +323,8 @@ class WaveManager:
         Dropped cubes are captured in `_last_dropped` so `GameManager.on_tick`
         can count missed normals during the avalanche phase.
         """
-        assert 0 <= front_drop_z <= GRID_DEPTH, (
-            f"front_drop_z {front_drop_z} outside [0, {GRID_DEPTH}]"
+        assert 0 <= front_drop_z <= self._grid_depth, (
+            f"front_drop_z {front_drop_z} outside [0, {self._grid_depth}]"
         )
         for cube in self._cubes:
             if not cube.pending:
@@ -311,7 +335,8 @@ class WaveManager:
         self._cubes = [
             c for c in self._cubes if c.pending or c.grid_z >= front_drop_z
         ]
-        assert len(self._cubes) <= MAX_ACTIVE_CUBES, (
+        cap = GRID_WIDTH * self._grid_depth
+        assert len(self._cubes) <= cap, (
             "cube count exceeded cap after advance — spawn path broke its precondition"
         )
 
@@ -324,9 +349,9 @@ class WaveManager:
         that wave's pre-placed cubes begin advancing on the next tick.
         Raises `ValueError` if the z range is invalid.
         """
-        if not (0 <= z_min <= z_max < GRID_DEPTH):
+        if not (0 <= z_min <= z_max < self._grid_depth):
             raise ValueError(
-                f"z range [{z_min}, {z_max}] invalid for GRID_DEPTH {GRID_DEPTH}"
+                f"z range [{z_min}, {z_max}] invalid for grid_depth {self._grid_depth}"
             )
         activated = 0
         for cube in self._cubes:
@@ -366,6 +391,29 @@ class WaveManager:
             for cube in self._cubes
             if (not cube.pending) and cube.grid_z == front_edge_z + 1
         )
+
+    # --- Pending removal -----------------------------------------------------
+
+    def remove_pending_in_range(self, z_front: int, z_back: int) -> int:
+        """Remove all pending cubes whose grid_z is in [z_front, z_back].
+
+        Returns the count of cubes removed.  Raises ValueError for an invalid
+        z range.  Called by GameManager when a pre-placed pending wave is
+        consumed as a crush retry life and must not appear on screen or be
+        activated later.
+        """
+        if not (0 <= z_front <= z_back < self._grid_depth):
+            raise ValueError(
+                f"z range [{z_front}, {z_back}] invalid for grid_depth {self._grid_depth}"
+            )
+        before = len(self._cubes)
+        self._cubes = [
+            c for c in self._cubes
+            if not (c.pending and z_front <= c.grid_z <= z_back)
+        ]
+        removed = before - len(self._cubes)
+        assert removed >= 0, "remove_pending_in_range removed negative cubes"
+        return removed
 
     # --- Rendering hand-off --------------------------------------------------
 

@@ -5,9 +5,10 @@ When resuming after a break, read this file first to understand the current stat
 
 ---
 
-## Status: PLAN COMPLETE ✓
+## Status: V3 COMPLETE ✓
 
-All 25 steps implemented and approved. The game is a fully playable browser PWA with:
+All 45 steps implemented and approved (original plan Steps 1–25, plus post-v1
+Steps 26–33 and v3 Steps 34–45). The game is a fully playable browser PWA with:
 procedural audio, Stage 2, bundled font, HUD caching, particle captures, face shading,
 checkerboard grid, player shadow, danger telegraph, turbo key, Esc pause menu, transition
 holds, camera rework, and movement priority — all shipping on top of the original
@@ -107,9 +108,22 @@ Steps 3+ are split into **Phase A (Development)** and **Phase B (Testing)** per 
 | 27 | Player-following camera + zoom | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
 | 28 | All waves visible + activation system | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
 | 29 | Stage intro rolling animation (tsunami) | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
-| 30 | Stages 3–10 full progression | APPROVED 2026-05-07 | AWAITING USER | IN PROGRESS |
-| 31 | Graphics rework (1280×720 + aalines) | AWAITING USER | NOT STARTED | IN PROGRESS |
-| 32 | Multi-file stage/wave/grid redesign | AWAITING USER | NOT STARTED | IN PROGRESS |
+| 30 | Stages 3–10 full progression | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 31 | Graphics rework (1280×720 + aalines) | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 32 | Multi-file stage/wave/grid redesign | APPROVED 2026-05-07 | APPROVED 2026-05-07 | APPROVED 2026-05-07 |
+| 33 | Camera / grid / player persistence redesign | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 34 | Opening feel (PLAYER_SPAWN_Z 21 → 37) | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 35 | Wave variety: distinct W1 openers for all 10 stages | APPROVED 2026-05-08 | APPROVED 2026-05-08 | APPROVED 2026-05-08 |
+| 36 | Wave pool system, wave codes, crush-retry gate | APPROVED 2026-05-18 | APPROVED 2026-05-18 | APPROVED 2026-05-18 |
+| 37 | High score table (localStorage bridge) | APPROVED 2026-05-19 | APPROVED 2026-05-19 | APPROVED 2026-05-19 |
+| 38 | Stage Clear stats screen | APPROVED 2026-05-19 | APPROVED 2026-05-19 | APPROVED 2026-05-19 |
+| 39 | Row gained/lost HUD counter + row counter + stagger + crush fix | APPROVED 2026-05-19 | APPROVED 2026-05-19 | APPROVED 2026-05-19 |
+| 40 | Platform depth (grid table walls) | APPROVED 2026-05-20 | APPROVED 2026-05-20 | APPROVED 2026-05-20 |
+| 41 | V2: Animated player character | APPROVED 2026-05-21 | NOT STARTED | APPROVED 2026-05-21 |
+| 42 | Character facing, arms, remove shadow | APPROVED 2026-05-21 | NOT STARTED | APPROVED 2026-05-21 |
+| 43 | Row cap removed; kneel on mark; arm raise on detonate | APPROVED 2026-05-21 | NOT STARTED | APPROVED 2026-05-21 |
+| 44 | Wave arrangement variants + grid-depth growth fixes (Stage 5 void, wave back-wall, WaveManager depth caps) | APPROVED 2026-05-21 | NOT STARTED | APPROVED 2026-05-21 |
+| 45 | Row crumble/arrival animations, wave COM camera, zoom, character fix | APPROVED 2026-05-23 | NOT STARTED | APPROVED 2026-05-23 |
 
 **Phase A values:** `NOT STARTED` → `IN PROGRESS` → `AWAITING USER` (code done, panel clean, STEP<N>_REVIEW.md written).
 **Phase B values:** `NOT STARTED` → `IN PROGRESS` (user testing / fix cycle) → `APPROVED <date>`.
@@ -1214,7 +1228,7 @@ Step 30 final state:
   not a Step 30 regression), Vision Lead APPROVED, UX Tester APPROVED, Platform Engineer APPROVED.
 - `docs/STEP30_REVIEW.md` written.
 
-**Step 31 — AWAITING USER.**
+**Step 31 — APPROVED 2026-05-07** (ratified: Steps 32–40 built on top of it without issue).
 
 Step 31 final state:
 - `constants.py`: `SCREEN_WIDTH` 960 → 1280; `SCREEN_HEIGHT` 640 → 720 (true 16:9).
@@ -1407,4 +1421,318 @@ Post-fix: `ruff check` + `mypy --strict` both clean.
 
 **Step 33 APPROVED by user (2026-05-15).**
 
-**Next step: awaiting user direction.**
+---
+
+### Session — 2026-05-15 — v3 planning
+
+v3 plan written to `docs/PLAN_V3.md`. Branch `v3` created from `master`.
+
+**v3 themes:** Feel & balance (primary) + high score table (additional).
+
+**v3 step tracker:**
+
+| Step | ID  | Description                            | Status      |
+|------|-----|----------------------------------------|-------------|
+| 34   | F1  | Opening feel (PLAYER_SPAWN_Z 21 → 37)        | APPROVED 2026-05-17 |
+| 35   | F2  | Wave variety — distinct openers, Stages 1–10 | APPROVED 2026-05-08 |
+| 36   | F3  | Wave pool system + crush-retry gate           | APPROVED 2026-05-18 |
+| 37   | H1  | High score table (localStorage bridge)        | APPROVED 2026-05-19 |
+| 38   | U1  | Stage Clear stats screen                      | APPROVED 2026-05-19 |
+| 39   | U2  | Row gained/lost HUD counter                   | APPROVED 2026-05-19 |
+| 40   | V1  | Platform depth (grid table walls)             | APPROVED 2026-05-20 |
+| 41   | V2  | Animated player character                     | APPROVED 2026-05-21 |
+| 42   | R1  | Wave arrangement variants (pool + shuffle)    | APPROVED 2026-05-21 |
+| 43   | V3  | Kneel on mark; arm raise on detonate/trigger  | APPROVED 2026-05-21 |
+| 44   | R2  | Wave back-wall + WaveManager depth caps       | APPROVED 2026-05-21 |
+| 45   | V4  | Row crumble/arrival anims, wave COM camera    | APPROVED 2026-05-23 |
+
+**Step 34 APPROVED by user (2026-05-17).**
+
+**Step 35 (F2) — wave variety — APPROVED 2026-05-08.**
+
+---
+
+### Session — 2026-05-17 — Step 35 (F2) expanded (Stages 2, 3, 7)
+
+User requested: "These need to be available earlier on with stage 1 so the first 4
+stages are varied too." Three additional W1 redesigns in `wave_data.py`:
+
+- Stage 2: A@col2 only (no F) — ideal 39 (was 37). Clean A introduction.
+- Stage 3: F@col0 & col6 (edge F) + A@col3 (centre) — ideal 35 (was 36).
+  Blast safety: |3-0|=3 ✓, |3-6|=3 ✓.
+- Stage 7: F@col1 & col7 (flanking F, no A shortcut) — ideal 86 (was 90 all-Normal).
+  Resolves Stage 1/7 duplicate signature conflict.
+
+All-stage W1 signatures now unique:
+  S1=all-Normal; S2=clean A; S3=edge F; S4=asymm A+gap; S5=dual A;
+  S6=centre F flanked by A; S7=F flanking no A; S8=corner A;
+  S9=near-edge F+centre A; S10=triple A chain.
+
+`uv run ruff check .` + `uv run mypy --strict .` — 14 files, all clean.
+`docs/STEP35_REVIEW.md` updated with revised table, new test cases 9–11, and
+revised Stage 7 note. Awaiting user approval.
+
+---
+
+### Session — 2026-05-17 — Step 35 (F2) implemented
+
+Step 35 is a wave_data.py-only change. Seven Stage W1 openers redesigned:
+
+- Stage 4: A@col1 (left-skewed), gap at col3 — ideal 51 (was 53, pattern redesigned)
+- Stage 5: Dual A@col2 & col6 — ideal 66 (was 69)
+- Stage 6: A@col1 + A@col7 flanking F@col4 (centre trap) — ideal 82 (was 87)
+- Stage 7: All-Normal 5 rows — ideal 90 (was 83, pattern redesigned; later revised)
+- Stage 8: A@col0 (far-left corner) — ideal 107 (was 105)
+- Stage 9: F@col1 & col9 + A@col5 (near-edge traps) — ideal 125 (was 129)
+- Stage 10: Triple A@col2,col5,col8 (full-width chain) — ideal 145 (was 151)
+
+All blast-safety rules verified (A/F ≥2 cols apart). All mirror-safe. All ideal_steps
+arithmetic independently confirmed by Code Quality agent.
+
+Engine concerns resolved during review:
+- Stage 8 A@col0 blast: `_mark_trap_area` bounds-checks neighbors; col-1 skipped. ✓
+- Stage 10 triple-A: trap areas x=1-3, x=4-6, x=7-9 — no overlap. ✓
+
+Expert panel:
+- Vision Lead: APPROVED WITH CONCERNS (5 advisory notes, all non-blocking)
+- Code Quality: APPROVED
+- Platform Engineer: APPROVED
+- UX Tester: APPROVED WITH CONCERNS (Stage 9 double-novelty advisory)
+
+`docs/STEP35_REVIEW.md` written. Awaiting user approval.
+
+---
+
+### Session — 2026-05-17 — Step 36 (F3) implemented
+
+Wave pool system, wave codes, and crush-retry gate.
+
+**`wave_data.py` — full rewrite:**
+- 80 `WaveData` objects total (40 A-variants = existing patterns + 40 B-variants).
+- `WaveData.__init__` gains `code: str` as first parameter; `.code` property added.
+- Codes follow `S{stage}W{slot}{A|B}` format (e.g. `S3W2B`).
+- `WAVE_POOLS: dict[str, tuple[WaveData, ...]]` — 40 pools × 2 variants.
+- `STAGE_POOL_SLOTS: tuple[tuple[str, ...], ...]` — 10 stages × 4 pool keys.
+- `select_all_waves(rng: random.Random)` — draws one variant per slot; returns
+  `tuple[tuple[WaveData, ...], ...]` (10 × 4).
+- `STAGES` backward-compat alias built from A-variants only.
+
+**`game_manager.py`:**
+- `_all_stage_waves: tuple[tuple[WaveData,...],...]` field — stores run-wide pool draw.
+- `_wave_crushed: bool` — set in `_trigger_avalanche`; gates retry in `_on_wave_cleared`.
+- `wave_code` property — returns active wave's code or `"---"` before first wave.
+- `wave_crushed` property — readable by HUD for `[RETRY]` tag.
+- `start_game(player, all_stage_waves)` — new entry point; stores full run selection,
+  delegates to `start_first_wave`.
+- `_respawn_current_wave(player)` — re-places pending cubes at same z positions so
+  `_begin_wave → _activate_wave` can re-run the same wave on a retry.
+- `_on_wave_cleared`: retry gate at top — if `_wave_crushed`, clears flag, respawns
+  wave, enters `WAVE_RISING`; otherwise normal clean-clear path.
+- `_on_stage_complete`: reads `_all_stage_waves[stage_index]` (not `STAGES` directly).
+- `_do_restart`: draws fresh pool with `select_all_waves(rng)`; calls `start_game`.
+- `_reset_state`: zeros `_all_stage_waves = ()` and `_wave_crushed = False`.
+
+**`main.py`:**
+- Added `import random`.
+- Changed import from `STAGES` to `select_all_waves`.
+- Startup: `game.start_game(player, select_all_waves(random.Random(...)))`.
+
+**`hud.py`:**
+- `MAX_HUD_CACHE_ENTRIES` bumped 5 → 6.
+- 5th stat line: `Code: S1W0A` (or `Code: S1W0A  [RETRY]` when retrying).
+- Line-count assertion updated 4 → 5.
+
+`uv run ruff check .` → all checks passed.
+`uv run mypy --strict .` → success, no issues in 14 source files.
+
+`docs/STEP36_REVIEW.md` written. Awaiting user verification.
+
+---
+
+### Session — 2026-05-18 — Step 36 approved; crush-retry exact-replay fix
+
+Step 36 (wave pool system, wave codes, crush-retry gate) approved by user.
+
+Key revisions implemented across this session (rev7 → rev7b → rev7c):
+
+**rev7 — Crush mechanic redesign:**
+- Crush no longer advances to the next pre-placed wave.  The same wave respawns.
+- Each crush consumes the back-most pending wave as a "life" via
+  `_consume_last_pending_life()` (removes cubes via `remove_pending_in_range`,
+  pops from `_waves`/`_wave_z_starts`/`_wave_mirrors`).
+- When all lives are gone, `_post_rising_reload` → `_reload_remaining_waves` →
+  STAGE_INTRO with fresh pool variants for remaining needed slots.
+
+**rev7b — Exact-replay guarantee:**
+- `_spawn_all_waves_pending` now rolls each wave's mirror flag once and stores
+  it in `self._wave_mirrors: list[bool]`.
+- `_respawn_current_slot` uses the stored WaveData and mirror with zero new
+  randomness — byte-identical cube layout on every retry.
+
+**rev7c — Expert panel fixes:**
+- Code Quality BLOCKING: removed dead `player: Player` parameter from
+  `_spawn_all_waves_pending` and its 3 call sites.
+- UX B2: added `trigger_shake(amplitude=5.0, duration=0.25)` in
+  `_consume_last_pending_life` to signal life-consumed to the player.
+
+Panel: Vision Lead APPROVED, Code Quality APPROVED, Platform Engineer APPROVED,
+UX Tester APPROVED WITH ADVISORY (lives-remaining indicator filed as future enhancement).
+
+**Step 36 APPROVED 2026-05-18.**
+
+---
+
+### Session — 2026-05-17 — Step 34 (F1) implemented
+
+Step 34 is a constants-only change with one method tweak:
+
+- `PLAYER_SPAWN_Z`: 21 → 37 (Stage-1 opening gap 31 → 15 tiles)
+- `CAMERA_EYE_Z_OFFSET`: 19.5 → 35.5 (preserves 12.4° camera elevation angle)
+- `clamp_z_before_wave` scan: `wave_front_z − 1` → `wave_front_z − 2`
+  (2-tile buffer between clamped player and wave face at Stages 8–10)
+- Guard updated: `wave_front_z <= 0` → `wave_front_z <= 1`
+- Docstring updated to document the 2-tile buffer and new z-range values
+
+Expert panel:
+- Vision Lead: APPROVED WITH CONCERNS — camera geometry comment block stale (fixed)
+- Code Quality: APPROVED — no new logic, ruff + mypy clean
+- Platform Engineer: APPROVED — no WASM-incompatible patterns
+- UX Tester: BLOCKER (fixed) — 1-tile clamp buffer too tight at Stages 8–10
+
+Post-fix: `uv run ruff check .` + `uv run mypy --strict player.py` both clean.
+
+`docs/STEP34_REVIEW.md` written. Awaiting user approval.
+
+---
+
+### Session — 2026-05-19 — Steps 37 (H1), 38 (U1), 39 (U2) approved
+
+All three steps implemented, panel-reviewed, and approved.
+
+**Step 37 (H1) — High score table** — localStorage bridge via pygbag JS interop; 5-entry table persisted across sessions; dedicated HIGH_SCORE screen between GAME_OVER and TITLE.
+
+**Step 38 (U1) — Stage Clear stats screen** — STAGE_CLEAR overlay showing: perfect waves, IQ this stage (coloured by gain/loss), rows gained, rows lost, rows surviving. Gated on 3 s display; 2 s skip on any key. `_stage_rows_lost` and `_stage_rows_gained` fields added to `GameManager`.
+
+**Step 39 (U2) — Row gained/lost HUD counter** — Four changes approved:
+
+1. Floating `+1`/`−1` labels at top-right on every `delete_front_row` / `restore_front_row` call (5 call sites). WASM blocker fixed (Unicode ▲/▼ → plain ASCII). Fade blocker fixed (RGB-multiply → `surf.set_alpha`).
+2. Permanent `Rows: N` counter top-right (`hud.py`), right-aligned at same margin as delta labels. `MAX_HUD_CACHE_ENTRIES` bumped 6→7.
+3. 1-second temporal stagger for simultaneous row delta events (`_next_delta_delay` accumulator; negative `elapsed` = invisible delay).
+4. Wave-passes-through-wave crush-retry bug fixed: `_repack_pending_waves` trimmed `_waves` and `_wave_mirrors` to `[wave_index:]` before the repack loop, so already-cleared wave slots are not rematerialised as blocking pending cubes.
+
+**Step 39 APPROVED 2026-05-19.**
+
+**Step 40 (V1) — Platform depth (grid table walls)** — Dark wall faces hang TABLE_DEPTH=8 units below y=0 along the front, left, and right edges of the grid, creating the "suspended table over a void" aesthetic. Post-panel fix (2026-05-20): all three windings were reversed after analytical confirmation that the follow camera's right=(−1,0,0) axis made the original cross products negative (back-facing). Front wall not visible at game start (it is behind the camera at fz=−0.5) but appears as penalty rows are deleted. Side walls at gz≥40 always visible during gameplay.
+
+**Step 40 APPROVED 2026-05-20.**
+
+**Step 41 (V2) — Animated player character** — Replaces static player cube with low-poly humanoid: head (0.22×0.22×0.22), torso (0.28×0.30×0.20), two swinging legs (0.10×0.36×0.14 each). Total height 0.88 units (game cubes are 1.0). Animation fix applied after user reported "no animations": original Z-axis swing (0.12 wu → ~1.7 screen pixels at camera angle) was imperceptible. Fix switches to Y-axis: foot lift 0.18 wu + whole-body bob 0.08 wu = ~11 screen pixels per step at game distance. Leading leg lifts; trailing leg stays planted; roles alternate via `step_parity`. Crushed state zeros all lift and bob, flattens character to 13% height in dark red. All four expert panels approved the fix. 24 FaceDescriptors per frame (6 per body part). Added `_append_part_faces` helper to keep `get_player_character_faces` under 50 lines. ruff + mypy --strict clean on all 15 source files.
+
+**Step 42 (V1) — Character facing, arms, shadow removed** — Added facing direction to Player (`_facing: Direction`, `facing` property, default FORWARD). Head face highlight: the face the player last moved toward gets `_CHAR_FACE_COLOR=(210,235,255)`, a distinctly lighter blue. Two arms added as small boxes (0.08×0.18×0.08 wu) hanging from shoulder joints at y=0.61, x-offset ±0.18 from tile centre. Arms swing cross-body (right arm forward with left leg and vice versa). `_CHAR_TOTAL_FACES` raised from 24 to 36. `_append_arm_faces` helper added to keep `get_player_character_faces` within 50 lines. Player shadow (`_draw_player_shadow`) removed from main.py. Vision Lead fix: kneel-drop increased from 0.12→0.20 wu after panel noted sub-perceptible body drop. All four expert panels APPROVED.
+
+**Step 43 (V1) — Row cap removed; kneel on mark; arm raise on detonate** — Three changes:
+1. **Row cap removed**: `GridManager.restore_front_row()` now grows the grid when already at full capacity (front_edge_z==0), appending `_width` new PLATFORM tiles at z=self._depth and incrementing `_depth`. Waves are unaffected (packed from `GRID_DEPTH-1=59`). `_initial_depth` tracks the baseline for `resize()` and `reset()` to discard growth on game restart. Perfect waves now correctly show +1 and push `surviving_rows` above 60.
+2. **Kneel on SPACE held**: `get_player_character_faces` gains `is_marking: bool=False`. While held: walk animation zeroed, body drops 0.20 wu (~8.4 px), right leg compressed to 0.20 wu shin stub (knee-to-ground), left leg shortened to 0.24 wu (pelvis-down). `is_marking = bool(held_keys[KEY_MARK])` in main loop.
+3. **Raised arm on Z press**: `get_player_character_faces` gains `is_detonating: bool=False`. `_drain_events` returns a `det_fired: bool` flag; `detonate_flash: float` timer (0.4 s) set in main loop. Right arm cy moves from below-shoulder (0.52) to above-shoulder (0.70) for the flash duration. `_append_arm_faces` updated to accept separate `l_arm_cy`/`r_arm_cy`. Vision Lead required fix: `_CHAR_KNEEL_DROP` and `_CHAR_KNEEL_HIP_Y` 0.12→0.20 wu (original values sub-perceptible). All four panels APPROVED post-fix. mypy --strict + ruff clean on all 14 source files.
+
+**Steps 41/42/43 APPROVED 2026-05-21.**
+
+Post-approval correction to Step 43: ENTER/X (trigger) raises right arm only; Z (detonate) raises both arms. `is_triggering` parameter added to `get_player_character_faces` and `_build_player_faces`; `trig_fired` flag added to `_drain_events`. All mypy/ruff checks pass. 49/50/13 exec lines in the three modified functions.
+
+---
+
+### Session — 2026-05-21 — Step 44 (Wave arrangement variants)
+
+**Step 44 — Wave arrangement variants** (`wave_data.py`, `game_manager.py`):
+
+The pool system already randomised which A/B variant of each wave slot you saw, but the slot *order* (W0→W1→W2→W3) was always fixed. Step 44 shuffles slots 1-3 (W1, W2, W3) within each stage using the run's RNG, keeping slot 0 (the opener) fixed as the first wave. The shuffle is determined at game start and is consistent for the entire run.
+
+**`wave_data.py` — `select_all_waves`:**
+- Slot 0 (opener) always placed first — it is the fixed anchor wave for each stage.
+- Slots 1-3 shuffled with `rng.shuffle(remaining)` (3-element list, bounded).
+- Within each slot, A/B variant picked as before with `rng.choice(pool)`.
+- Variety: 3! = 6 orderings × 2^4 = 16 A/B combos = 96 possible sequences per stage.
+- Docstring note added: W0 is not always easier in Stages 3-10 (FORBIDDEN present from S3 onward); the term "gentlest" was replaced with "fixed anchor wave."
+
+**`game_manager.py` — `_reload_remaining_waves`:**
+- Previously derived pool keys from `STAGE_POOL_SLOTS` fixed order; a crush-retry reload
+  would ignore the shuffled sequence and revert to W0/W1/W2/W3 ordering.
+- Now derives pool keys from `_all_stage_waves[stage_index]` (the run's shuffled selection).
+- Pool key extracted as `wave_ref.code[:-1]` (e.g. `"S3W2A"` → `"S3W2"`).
+- Legacy/test fallback: if `_all_stage_waves` is empty, A-variants of `STAGE_POOL_SLOTS` used.
+
+**Self-tests:** 258/258 passed. T6 confirmed all 6 possible W1-W3 orderings observed across 100 seeds.
+
+**Expert panel:**
+- Vision Lead: APPROVED WITH CONCERNS (fixed) — "gentlest introduction" → "fixed anchor wave" comment fix applied.
+- Code Quality: APPROVED — all 10 rules, 18 exec lines / 30 exec lines, zero ruff/mypy issues.
+- UX Tester: APPROVED WITH CONCERNS (non-blocking) — wave stack preview no longer implies order; W-number soft difficulty expectation broken for experienced players. Both accepted.
+- Platform Engineer: APPROVED — `rng.shuffle` on 3 elements safe in WASM; `str[:-1]` correct for all 80 wave codes; frame budget unchanged.
+
+**Post-review bug reports (user testing):**
+
+Three bugs found after the initial Step 44 review:
+
+1. **Stage 5 void asymmetry** (`grid_manager.py` `set_active_width`): new columns beyond the old width were initialized to PLATFORM for all rows, including penalty-void rows. When the grid widened from 7→9, columns 7-8 appeared as platform on void rows, creating asymmetric visuals.
+   - Fix: after copying existing columns, check if the entire row is all-void; if so, set new columns to VOID too.
+
+2. **Perfect-wave new row not usable** / **waves not at back wall** (`game_manager.py` `_compute_wave_z_starts`): `z_back` was hardcoded to `GRID_DEPTH - 1 = 59`. After Perfect-wave growth to depth 61, waves still packed from z=59, leaving z=60 as dead space.
+   - Fix: `z_back = self._grid.depth - 1` (live grid depth). Sync `self._wave.grid_depth = self._grid.depth` before every wave spawn call.
+
+3. **WaveManager GRID_DEPTH caps** (`wave_manager.py`): `spawn_cube`, `activate_pending`, `remove_pending_in_range`, `_advance_tick` all used `GRID_DEPTH` as a hard ceiling, rejecting z≥60. Also `wave_data.spawn_positions` rejected `z_start >= GRID_DEPTH`.
+   - Fix: `WaveManager` gains `_grid_depth: int` field + `grid_depth` property/setter; all caps use `self._grid_depth`. `spawn_positions` removes the upper-bound cap.
+   - `spawn_debug_row` also updated: `GRID_DEPTH - 1` → `self._grid_depth - 1`.
+   - `MAX_ACTIVE_CUBES` module constant retained (used by `main.py`), comment updated to warn against using it in per-instance assertions.
+
+**Second expert panel (after bug fixes):**
+- All four reviewers: APPROVED WITH CONCERNS (non-blocking). Defensive depth sync added to `_on_wave_cleared` per Vision Lead recommendation. `spawn_debug_row` updated per Code Quality. `MAX_ACTIVE_CUBES` comment clarified per Platform Engineer.
+- ruff + mypy --strict: zero errors. 6/6 self-tests pass.
+
+**Step 44 APPROVED 2026-05-21.**
+
+---
+
+### Session — 2026-05-21 — Step 45 first attempt (REVERTED)
+
+Implemented row crumble/arrival animations + camera zoom + doubled sub-grid player movement. The doubled-grid player movement caused regressions (character misalignment, blocking issues). Entire change set reverted to Step 44 state at user request.
+
+---
+
+### Session — 2026-05-23 — Step 45 re-implementation (row crumble/arrival animations, wave COM camera, zoom, character fix)
+
+Step 45 re-implemented without sub-grid movement. All approved features:
+
+**Character position fix (`main.py`):**
+- `_build_player_faces` passes `float(player.grid_x), float(player.grid_z)` to `get_player_character_faces()` instead of `player.world_pos`. Character now renders at tile centres (integers = correct tile-centre world coords). `world_pos` still used only for camera eye tracking.
+
+**Row crumble/arrival animations (`effects.py`, `constants.py`, `game_manager.py`):**
+- `_CrumbleTile` / `_ArrivalTile` dataclasses. `elapsed` starts negative (pre-zoom delay), ticks positive during the visible fade.
+- `spawn_row_crumbles(z_rows, grid_width)` — accepts a list of Z rows and assigns 1-second stagger: `start = -(CRUMBLE_PRE_ZOOM_DELAY + row_idx * ROW_CRUMBLE_STAGGER)`. Farthest row (highest Z, farthest from player) always gets `row_idx = 0` (crumbles first).
+- `spawn_row_arrival(gz, grid_width)` — warm gold `(255,200,80)` → platform colour fade.
+- `iter_crumble_tiles()` / `iter_arrival_tiles()` yield `(gx, gz, progress)` only when `elapsed >= 0`.
+- `has_active_row_anim` property: `True` while any tile is alive (including pre-delay phase), so the camera zooms out before the first tile fades.
+- `_update_row_anims(dt)` advances elapsed, evicts completed tiles.
+- `_apply_avalanche_penalties` batched: all row deletions collected into `crumble_rows`, sorted descending Z, then a single `spawn_row_crumbles(crumble_rows, width)` call produces correct 1-second stagger across multiple simultaneous penalties.
+- All other `delete_front_row` / `restore_front_row` call sites pass a single-element list (no stagger needed).
+
+**Camera zoom (`constants.py`, `main.py`):**
+- `CAM_ZOOM_OUT = 1.80`, `CAM_ZOOM_SPEED_OUT = 7.0`, `CAM_ZOOM_SPEED_IN = 2.2`.
+- `cam_zoom: list[float]` lerps toward `CAM_ZOOM_OUT` while `effects.has_active_row_anim`; lerps toward 1.0 otherwise.
+- Applied: `zoomed_eye = look_at + (base_eye - look_at) * zoom`.
+
+**Wave centre-of-mass camera (`main.py`):**
+- `_compute_wave_com_z(wave, fallback_z)`: mean Z of all active (non-pending) wave cubes, adjusted by `+ 0.5 - wave.tick_progress` for sub-tile continuity between ticks.
+- During `WAVE_ACTIVE`: camera look-at Z tracks wave COM.
+- During `WAVE_CLEARING`: `wave_target_z = cam_xz[1]` — freeze on capture position, no drift while cubes resolve.
+- Otherwise: follows player Z.
+
+**`is_triggering` arm raise (`cube_data.py`, `main.py`):**
+- `get_player_character_faces` gains `is_triggering: bool = False`. Left arm raised on X key (trigger), right arm on Z key (detonate). Separate per-arm gestures.
+- `_drain_events` returns 5-tuple `(running, paused, menu_selected, det_fired, trig_fired)`.
+- `trigger_flash: float` timer (0.4 s); `is_triggering = trigger_flash > 0.0`.
+
+**New constants:** `ROW_CRUMBLE_DURATION = 0.55`, `ROW_CRUMBLE_STAGGER = 1.00`, `CRUMBLE_PRE_ZOOM_DELAY = 0.50`, `ROW_ARRIVAL_DURATION = 0.90`, `MAX_CRUMBLE_TILES = 176`, `MAX_ARRIVAL_TILES = 11`, `CAM_ZOOM_OUT = 1.80`, `CAM_ZOOM_SPEED_OUT = 7.0`, `CAM_ZOOM_SPEED_IN = 2.2`, `TRIGGER_FLASH_DUR = 0.4`.
+
+**Tooling:** ruff + mypy --strict clean on all source files.
+
+**Step 45 APPROVED 2026-05-23.**

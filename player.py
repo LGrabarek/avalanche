@@ -41,6 +41,13 @@ class Player:
         # so the very first held-key frame moves immediately (no perceived lag).
         self._cooldown: float = 0.0
         self._crushed: bool = False
+        # Step 41: walk-animation state.
+        # _step_parity flips each successful move so legs alternate each step.
+        # _cooldown already decays each frame; walk_progress derives from it.
+        self._step_parity: bool = False
+        # Step 42: facing direction — last direction the player moved.
+        # Default FORWARD so the character starts facing the wave (back to camera).
+        self._facing: Direction = Direction.FORWARD
 
     # --- Public read-only accessors ------------------------------------------
 
@@ -55,6 +62,28 @@ class Player:
     @property
     def is_crushed(self) -> bool:
         return self._crushed
+
+    @property
+    def walk_progress(self) -> float:
+        """Normalised walk cycle in [0, 1].
+
+        1.0 = just took a step; decays linearly to 0.0 = idle / fully rested.
+        `sin(π × walk_progress)` peaks at 0.5 (mid-cooldown) and is 0 at both
+        ends, so legs always return to centre when still and when landing.
+        """
+        if MOVE_COOLDOWN <= 0.0:
+            return 0.0
+        return self._cooldown / MOVE_COOLDOWN
+
+    @property
+    def step_parity(self) -> bool:
+        """Flips each step; drives alternating leg lead in the walk cycle."""
+        return self._step_parity
+
+    @property
+    def facing(self) -> Direction:
+        """Last movement direction; drives character head orientation."""
+        return self._facing
 
     @property
     def world_pos(self) -> tuple[float, float, float]:
@@ -72,7 +101,7 @@ class Player:
         return (self._grid_x + 0.5, 0.0, self._grid_z + 0.5)
 
     def position(self) -> tuple[int, int]:
-        """Return the current grid position as `(x, z)`."""
+        """Return the current tile-grid position as `(grid_x, grid_z)`."""
         return (self._grid_x, self._grid_z)
 
     def reset(self) -> None:
@@ -96,6 +125,8 @@ class Player:
         self._grid_z = PLAYER_SPAWN_Z
         self._crushed = False
         self._cooldown = 0.0
+        self._step_parity = False
+        self._facing = Direction.FORWARD
         assert self._grid.is_valid_position(self._grid_x, self._grid_z), (
             "player spawn not walkable after reset"
         )
@@ -112,35 +143,59 @@ class Player:
         """
         self._crushed = False
 
-    def clamp_z_before_wave(self, wave_front_z: int) -> None:
-        """Ensure the player is not inside the new wave stack at stage start.
+    def position_near_wave(self, wave_front_z: int, gap: int) -> None:
+        """Place the player `gap` tiles below the wave front at game start.
 
-        If the player's Z ≥ wave_front_z (they advanced into where the new
-        stage's wave 0 is placed), pull them back to the nearest valid tile
-        below wave_front_z. No-op when already safe.  Preserves X (Step 33:
-        lateral position persists across stage boundaries).
-
-        The scan for a valid tile descends from wave_front_z−1 toward z=0 and
-        is bounded by wave_front_z iterations (finite).  In normal play the
-        loop never runs: the first candidate tile (wave_front_z−1 ≈ 47) is
-        always PLATFORM — reaching that depth via penalty-row deletion would
-        require ≈48 misses and triggers GAME_OVER first.
+        Called by GameManager immediately after spawning Stage 1 Wave 1 cubes
+        to position the player a fixed number of tiles below wave-0's front face.
         """
+        if gap <= 0:
+            raise ValueError(f"gap must be positive, got {gap}")
         if wave_front_z <= 0:
             raise ValueError(f"wave_front_z must be positive, got {wave_front_z}")
-        if self._grid_z < wave_front_z:
-            return  # already safe — no-op
-        # Scan downward from wave_front_z-1 for the nearest walkable tile.
-        for target_z in range(wave_front_z - 1, -1, -1):
-            if self._grid.is_valid_position(self._grid_x, target_z):
+        target_z = wave_front_z - gap
+        if target_z < 0:
+            raise ValueError(
+                f"wave_front_z={wave_front_z} − gap={gap} = {target_z} < 0"
+            )
+        if not self._grid.is_valid_position(self._grid_x, target_z):
+            raise ValueError(
+                f"target tile ({self._grid_x}, {target_z}) is not walkable"
+            )
+        self._grid_z = target_z
+        assert self._grid.is_valid_position(self._grid_x, self._grid_z), (
+            "player not on walkable tile after position_near_wave"
+        )
+
+    def clamp_z_before_wave(self, wave_front_z: int) -> None:
+        """Ensure the player is not inside or immediately adjacent to the new wave.
+
+        If the player's tile Z ≥ wave_front_z − 1, pull them back to the
+        nearest valid tile at or below wave_front_z − 2.  This 2-tile buffer
+        gives the player one full reaction tile between themselves and the
+        wave face during the frozen STAGE_INTRO countdown.  No-op when safe.
+        """
+        if wave_front_z <= 1:
+            raise ValueError(f"wave_front_z must be > 1, got {wave_front_z}")
+        if self._grid_z < wave_front_z - 1:
+            return  # already have 2-tile buffer — no-op
+        # Scan downward from wave_front_z-2 for the nearest walkable tile.
+        tile_x = self._grid_x
+        max_scan = wave_front_z - 1
+        for scan in range(max_scan):
+            assert scan < max_scan, "clamp scan exceeded bound"
+            target_z = wave_front_z - 2 - scan
+            if target_z < 0:
+                break
+            if self._grid.is_valid_position(tile_x, target_z):
                 self._grid_z = target_z
-                assert self._grid.is_valid_position(self._grid_x, self._grid_z), (
+                assert self._grid.is_valid_position(tile_x, self._grid_z), (
                     "player not on walkable tile after Z clamp"
                 )
                 return
         raise ValueError(
             f"no walkable tile below wave_front_z={wave_front_z} "
-            f"in column {self._grid_x} — all rows voided"
+            f"in column {tile_x} — all rows voided"
         )
 
     # --- Per-frame update -----------------------------------------------------
@@ -154,16 +209,7 @@ class Player:
     ) -> None:
         """Advance the cooldown and, if a movement key is held, move one tile.
 
-        `held_keys` is the raw `pygame.key.get_pressed()` sequence. Opposite-
-        axis holds cancel (LEFT+RIGHT or FORWARD+BACKWARD → no move), so a
-        player "leaning on the keyboard" doesn't snap a silent direction.
-        `wave_blocked` is the set of tiles currently occupied by wave cubes;
-        the player cannot enter those tiles (same blocking as void tiles).
-        When a Z-axis key (FORWARD/BACKWARD) and an X-axis key (LEFT/RIGHT) are
-        held simultaneously, the Z-axis wins (Step 23 perpendicular priority).
-        `max_col` is the inclusive right column boundary for movement; the player
-        cannot step into columns beyond this.  Defaults to GRID_WIDTH-1 (full
-        grid).  Pass `game.active_wave_width - 1` to constrain to wave columns.
+        `max_col` is the inclusive right tile-column boundary.
         """
         if dt < 0.0:
             raise ValueError(f"dt must be non-negative, got {dt}")
@@ -188,30 +234,31 @@ class Player:
         wave_blocked: frozenset[tuple[int, int]] | None = None,
         max_col: int = GRID_WIDTH - 1,
     ) -> bool:
-        """Attempt a single-tile move. Returns True iff the move happened.
+        """Attempt a single tile step. Returns True iff the move happened.
 
-        Refuses moves that would leave the player off the grid, onto a VOID
-        tile, into a tile currently occupied by a wave cube, or beyond `max_col`
-        (the inclusive right boundary of the active wave columns).  Passing
-        `max_col = game.active_wave_width - 1` keeps the player inside the
-        pattern area so they cannot camp on the outer PLATFORM tiles that have
-        no cubes during Stages 1-8 (Step 33).
+        Refuses moves that would enter a void tile, a wave-blocked tile, or
+        exceed `max_col` (inclusive tile-level right boundary).
         """
         if max_col < 0 or max_col >= GRID_WIDTH:
             raise ValueError(f"max_col {max_col} not in [0, {GRID_WIDTH - 1}]")
         dx, dz = direction.value
         new_x = self._grid_x + dx
         new_z = self._grid_z + dz
+        if new_x < 0 or new_z < 0:
+            return False
         if not self._grid.is_valid_position(new_x, new_z):
             return False
         if new_x > max_col:
             return False
         if wave_blocked is not None and (new_x, new_z) in wave_blocked:
             return False
+        # Commit the move.
         self._grid_x = new_x
         self._grid_z = new_z
+        self._step_parity = not self._step_parity
+        self._facing = direction
         assert self._grid.is_valid_position(self._grid_x, self._grid_z), (
-            "player landed on a non-walkable tile — is_valid_position lied"
+            "player landed on a non-walkable tile — blocking check failed"
         )
         return True
 
@@ -239,16 +286,7 @@ def _first_held_direction(held_keys: Sequence[bool]) -> Direction | None:
         original I.Q. behaviour: depth movement (towards or away from the
         advancing wave) is more critical than lateral repositioning, so the
         game prefers the direction that keeps the player out of harm's way.
-
-    In pygame parlance "pressed" is edge-triggered (`KEYDOWN`); this function
-    inspects held state, hence the "held" naming. `held_keys[key]` is forwarded
-    directly to pygame's `ScancodeWrapper`, which accepts any `K_*` value (it
-    internally maps to a scancode, even though arrow-key K_* constants are
-    numerically larger than the wrapper's length). We deliberately do not
-    bound-check `key` against `len(held_keys)` here.
     """
-    # Rule-5 precondition: reject an empty sequence — the one legitimately-
-    # wrong input shape. Every real ScancodeWrapper has the same fixed length.
     if len(held_keys) == 0:
         raise ValueError("held_keys sequence is empty")
     held_dirs: set[Direction] = set()
@@ -259,7 +297,6 @@ def _first_held_direction(held_keys: Sequence[bool]) -> Direction | None:
                 break
     if not held_dirs:
         return None
-    # Cancel opposing pairs. Iterating over a copy so we can mutate the set.
     for direction in tuple(held_dirs):
         opposite = _OPPOSITE_DIRECTION[direction]
         if opposite in held_dirs:
@@ -267,15 +304,10 @@ def _first_held_direction(held_keys: Sequence[bool]) -> Direction | None:
             held_dirs.discard(opposite)
     if not held_dirs:
         return None
-    # Z-axis priority (Step 23): when one FORWARD/BACKWARD and one LEFT/RIGHT
-    # key survive cancellation, keep only the Z-axis direction. This matches
-    # the original I.Q. control feel — depth movement takes precedence because
-    # the player is more likely to be dodging an incoming wave than sidestepping.
     z_dirs = held_dirs & {Direction.FORWARD, Direction.BACKWARD}
     x_dirs = held_dirs & {Direction.LEFT, Direction.RIGHT}
     if z_dirs and x_dirs:
         held_dirs = z_dirs
-    # Return the first surviving direction in the canonical iteration order.
     for direction in MOVEMENT_KEYS:
         if direction in held_dirs:
             return direction

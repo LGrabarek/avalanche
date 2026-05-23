@@ -30,6 +30,7 @@ class GridManager:
         if width <= 0 or depth <= 0:
             raise ValueError(f"grid dimensions must be positive, got {width}x{depth}")
         self._width: int = width
+        self._initial_depth: int = depth  # baseline depth; resize/reset return to this
         self._depth: int = depth
         self._tiles: list[TileState] = [TileState.PLATFORM] * (width * depth)
         self._marked: tuple[int, int] | None = None
@@ -73,7 +74,9 @@ class GridManager:
         """Restore every tile to PLATFORM and clear any active mark.
 
         Called when the player restarts the game from GAME_OVER or VICTORY.
+        Resets _depth to _initial_depth so Perfect-wave grid growth is discarded.
         """
+        self._depth = self._initial_depth
         self._tiles = [TileState.PLATFORM] * (self._width * self._depth)
         self._marked = None
         assert len(self._tiles) == self._width * self._depth, (
@@ -93,6 +96,7 @@ class GridManager:
                 f"new_width {new_width} must be in [1, GRID_WIDTH={GRID_WIDTH}]"
             )
         self._width = new_width
+        self._depth = self._initial_depth  # discard any Perfect-wave depth growth
         self._tiles = [TileState.PLATFORM] * (new_width * self._depth)
         self._marked = None
         assert len(self._tiles) == self._width * self._depth, (
@@ -130,7 +134,17 @@ class GridManager:
             new_start = z * new_width
             for x in range(copy_cols):
                 new_tiles[new_start + x] = self._tiles[old_start + x]
-            # Columns ≥ old_width already PLATFORM from pre-allocation.
+            # New columns beyond old_width: propagate VOID when the entire row
+            # is void (penalty-deleted rows must not appear as PLATFORM on the
+            # expanded side — asymmetric tile state causes visual corruption).
+            if new_width > copy_cols:
+                row_is_void = all(
+                    new_tiles[new_start + x] == TileState.VOID
+                    for x in range(copy_cols)
+                )
+                if row_is_void:
+                    for x in range(copy_cols, new_width):
+                        new_tiles[new_start + x] = TileState.VOID
         self._tiles = new_tiles
         self._width = new_width
         # Clear mark if it fell outside the new width.
@@ -277,7 +291,18 @@ class GridManager:
         )
         front = self.front_edge_z
         if front == 0:
-            return False          # grid fully intact; nothing to restore
+            # Grid fully intact — grow by one PLATFORM row appended at the back
+            # (z = self._depth).  Existing z-indices are unaffected; waves pack
+            # from GRID_DEPTH-1=59 and are not touched.  The extra row raises
+            # surviving_rows for the score and IQ calculations, matching the
+            # original I.Q. behaviour where Perfect clears on a full grid expand
+            # the platform beyond the stage's starting row count.
+            self._tiles.extend([TileState.PLATFORM] * self._width)
+            self._depth += 1
+            assert len(self._tiles) == self._width * self._depth, (
+                "tile storage size wrong after Perfect-wave grid growth"
+            )
+            return True
         restore_z = front - 1
         assert 0 <= restore_z < self._depth, (
             f"restore_z {restore_z} out of range — front_edge_z invariant violated"
